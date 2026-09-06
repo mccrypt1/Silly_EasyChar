@@ -51,3 +51,18 @@ PNG export embeds base64-encoded UTF-8 card JSON in the standard `chara` text ch
 - Portable Windows build and optional application updates
 - More granular lorebook and extension-field editing
 
+
+## SillyTavern folder library
+
+Use **Ordner koppeln** and choose the active SillyTavern character directory, commonly
+`SillyTavern/data/<user>/characters`. Cards can be searched, favorited and opened without
+starting SillyTavern. Changes are written back only after pressing **In SillyTavern speichern**.
+Immediately before every overwrite, Silly EasyChar stores a private local backup and retains the
+three newest versions for that card.
+
+Imported PNG/JSON cards and newly created cards remain independent until **Zum ST-Ordner** is used.
+
+## Guided wizard
+
+The Wizard tab covers name, description, personality, scenario, greeting, dialogue examples and
+roleplay rules. Every step accepts rough ideas or bullet points; **Mit Ollama ausarbeiten** expands

@@ -1,1 +1,3 @@
-fn main() { silly_easychar_lib::run() }
+fn main() {
+    silly_easychar_lib::run()
+}

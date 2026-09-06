@@ -2,6 +2,8 @@ import "./style.css";
 import { emptyCard, localScore, normalizeCard, normalizeLoreEntry } from "./card";
 import { embedCard, extractCard, imageAsPng } from "./png";
 import { models, runAi } from "./ai";
+import { CardLibrary } from "./library";
+import type { LibraryEntry } from "./library";
 import type { AiResult, CharacterCard, EditableField, ScoreResult } from "./types";
 
 const textFields: { key: EditableField; label: string; rows: number; hint: string }[] = [
@@ -24,6 +26,9 @@ let selected = new Set<EditableField>(["description", "personality", "scenario",
 let score: ScoreResult = localScore(card);
 let aiBusy = false;
 let statusTimer = 0;
+let linkedPath: string | null = null;
+let linkedFormat: "PNG" | "JSON" | null = null;
+let wizardStep = 0;
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
@@ -31,12 +36,15 @@ app.innerHTML = `
     <div class="brand"><div class="brand-mark">S</div><div><strong>Silly EasyChar</strong><small>Offline Character Studio</small></div></div>
     <div class="top-actions">
       <button id="newBtn" class="ghost">＋ Neu</button><button id="importBtn" class="ghost">↥ Import</button>
-      <button id="jsonBtn" class="ghost">JSON exportieren</button><button id="pngBtn" class="primary">PNG exportieren</button>
+      <button id="saveLinkedBtn" class="primary hidden">In SillyTavern speichern</button><button id="addFolderBtn" class="ghost hidden">Zum ST-Ordner</button>
+      <button id="versionsBtn" class="ghost hidden">Versionen</button><button id="jsonBtn" class="ghost">JSON exportieren</button>
+      <button id="pngBtn" class="primary">PNG exportieren</button>
     </div>
   </header>
   <main class="workspace">
     <aside class="left-panel">
       <section class="portrait-card">
+      <section class="library-card" id="libraryHost"></section>
         <div id="portrait" class="portrait"><span>Bild hinzufügen</span></div>
         <input id="imageInput" type="file" accept="image/*" hidden />
         <button id="imageBtn" class="wide ghost">Portrait wählen</button>
@@ -52,7 +60,7 @@ app.innerHTML = `
       <section class="score-card" id="scoreCard"></section>
     </aside>
     <section class="editor-panel">
-      <nav class="tabs"><button data-tab="fields" class="active">Charakter</button><button data-tab="extras">Extras</button><button data-tab="lore">Lorebook</button><span id="saveState">Lokal gespeichert</span></nav>
+      <nav class="tabs"><button data-tab="fields" class="active">Charakter</button><button data-tab="wizard">Wizard</button><button data-tab="extras">Extras</button><button data-tab="lore">Lorebook</button><span id="saveState">Lokal gespeichert</span></nav>
       <div id="tab-fields" class="tab-page active"><div id="fields" class="fields"></div></div>
       <div id="tab-extras" class="tab-page"><div class="extras-grid">
         <label>Tags (durch Komma getrennt)<input id="tags" /></label><label>Creator<input id="creator" /></label><label>Version<input id="version" /></label>
@@ -61,6 +69,19 @@ app.innerHTML = `
       <div id="tab-lore" class="tab-page"><div class="lore-head"><div><h2>Character Lorebook</h2><p>Schlüsselwortgesteuerte Details für Orte, Figuren, Regeln und Gegenstände.</p></div><button id="addLore" class="ghost">＋ Eintrag</button></div><div id="loreEntries"></div></div>
     </section>
     <aside class="ai-panel">
+      <div id="tab-wizard" class="tab-page">
+        <div class="wizard">
+          <div class="wizard-progress"><span id="wizardCount"></span><i><b id="wizardBar"></b></i></div>
+          <div class="wizard-card">
+            <small>SCHRITT-FÜR-SCHRITT-CARD</small><h2 id="wizardTitle"></h2><p id="wizardHelp"></p>
+            <label>Deine Stichpunkte, Ideen oder ein fertiger Text</label>
+            <textarea id="wizardNotes" rows="9"></textarea>
+            <div class="wizard-preview"><span>Aktueller Feldinhalt</span><p id="wizardCurrent"></p></div>
+            <div class="wizard-actions"><button id="wizardBack" class="ghost">← Zurück</button><button id="wizardUse" class="ghost">Notizen übernehmen</button><button id="wizardAi" class="primary">✦ Mit Ollama ausarbeiten</button><button id="wizardNext" class="ghost">Weiter →</button></div>
+          </div>
+          <div class="wizard-done hidden" id="wizardDone"><span>✓</span><h2>Grundkarte vollständig</h2><p>Alle Inhalte wurden in die passenden Character-Card-Felder übernommen. Du kannst sie nun im normalen Editor verfeinern.</p><button id="wizardFinish" class="primary">Zum Character Editor</button></div>
+        </div>
+      </div>
       <div class="ai-head"><div class="ai-avatar">✦</div><div><strong>Lokaler Schreibassistent</strong><small>Ollama · Daten bleiben auf deinem PC</small></div></div>
       <div class="quick-actions"><button data-ai="suggest">Ideen</button><button data-ai="grade">Bewerten</button><button data-ai="translate">Übersetzen</button><button data-ai="lorebook">Lorebook</button></div>
       <div class="selection"><div class="field-head"><b>Felder für Bearbeitung</b><button id="allFields" class="link">alle</button></div><div id="fieldChecks"></div></div>
@@ -70,6 +91,7 @@ app.innerHTML = `
       <div id="aiOutput" class="ai-output"><div class="empty-state"><span>✦</span><p>Wähle Felder und beschreibe deine Änderung – oder nutze eine Schnellaktion.</p></div></div>
     </aside>
   </main>
+  <div id="versionModal" class="modal hidden"><div class="modal-card"><div class="field-head"><h3>Letzte Kartenversionen</h3><button id="closeVersions">×</button></div><p>Vor jedem Speichern wird automatisch eine Version angelegt. Maximal drei werden behalten.</p><div id="versionList"></div></div></div>
   <div id="toast"></div><input id="fileInput" type="file" accept=".json,.png,application/json,image/png" hidden />`;
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
@@ -112,7 +134,7 @@ function renderAll() { renderFields(); renderChecks(); renderExtras(); renderLor
 function toast(message: string, bad=false) { const t=$("#toast"); t.textContent=message; t.className=bad?"show bad":"show"; setTimeout(()=>t.className="",3000); }
 function download(blob: Blob, name: string) { const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name.replace(/[\\/:*?"<>|]/g,"_"); a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }
 async function importFile(file: File) {
-  if (file.name.toLowerCase().endsWith(".json")) { card=normalizeCard(JSON.parse(await file.text())); }
+  if (file.name.toLowerCase().endsWith(".json")) { card=normalizeCard(JSON.parse(await file.text())); imageBuffer=null; if(imageUrl)URL.revokeObjectURL(imageUrl); imageUrl=""; }
   else { const buffer=await file.arrayBuffer(); const found=extractCard(buffer); if (!found) throw new Error("Dieses PNG enthält keine Character-Card-Metadaten."); card=found; imageBuffer=buffer; if(imageUrl)URL.revokeObjectURL(imageUrl); imageUrl=URL.createObjectURL(file); }
   score=localScore(card); renderAll(); saveDraft(); toast(`${card.data.name} importiert.`);
 }
@@ -132,8 +154,8 @@ function applyAiResult(r: AiResult, action: string) {
   $("#aiOutput").innerHTML=`<div class="result"><b>✓ ${action==="grade"?"Bewertung abgeschlossen":"Ergebnis übernommen"}</b>${r.explanation?`<p>${escapeHtml(r.explanation)}</p>`:""}${items?`<ol>${items}</ol>`:""}${r.score?`<p class="big-result">${r.score.total}<small>/100</small></p>`:""}${r.lorebook?`<p>${Object.keys(r.lorebook.entries).length} Lorebook-Einträge erstellt.</p>`:""}</div>`;
 }
 
-$("#newBtn").onclick=()=>{if(!confirm("Aktuelle Karte durch eine neue ersetzen? Der letzte Stand bleibt nur im lokalen Entwurf."))return; card=emptyCard(); imageBuffer=null;if(imageUrl)URL.revokeObjectURL(imageUrl);imageUrl="";score=localScore(card);renderAll();changed();};
-$("#importBtn").onclick=()=>$("#fileInput").click(); $("#fileInput").onchange=async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(f)try{await importFile(f);}catch(err){toast(err instanceof Error?err.message:String(err),true);}};
+$("#newBtn").onclick=()=>{if(!confirm("Aktuelle Karte durch eine neue ersetzen? Der letzte Stand bleibt nur im lokalen Entwurf."))return; card=emptyCard(); imageBuffer=null;if(imageUrl)URL.revokeObjectURL(imageUrl);imageUrl="";linkedPath=null;linkedFormat=null;wizardStep=0;score=localScore(card);renderAll();syncLinkedButtons();changed();};
+$("#importBtn").onclick=()=>$("#fileInput").click(); $("#fileInput").onchange=async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(f)try{linkedPath=null;linkedFormat=null;await importFile(f);syncLinkedButtons();}catch(err){toast(err instanceof Error?err.message:String(err),true);}};
 $("#imageBtn").onclick=()=>$("#imageInput").click(); $("#portrait").onclick=()=>$("#imageInput").click(); $("#imageInput").onchange=async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(!f)return;imageBuffer=await imageAsPng(f);if(imageUrl)URL.revokeObjectURL(imageUrl);imageUrl=URL.createObjectURL(new Blob([imageBuffer],{type:"image/png"}));renderPortrait();toast("Portrait übernommen.");};
 $("#jsonBtn").onclick=()=>download(new Blob([JSON.stringify(card,null,2)],{type:"application/json"}),`${card.data.name||"character"}.json`);
 $("#pngBtn").onclick=()=>{if(!imageBuffer){toast("Bitte zuerst ein Portrait wählen.",true);return;}download(embedCard(imageBuffer,card),`${card.data.name||"character"}.png`);toast("Character-Card-PNG erstellt.");};
@@ -143,6 +165,182 @@ $("#editAi").onclick=()=>ai("edit"); document.querySelectorAll<HTMLButtonElement
 $("#addGreeting").onclick=()=>{card.data.alternate_greetings.push("");renderExtras();changed();};
 $("#addLore").onclick=()=>{if(!card.data.character_book)card.data.character_book={name:`${card.data.name} Lorebook`,entries:[]};const i=card.data.character_book.entries.length;card.data.character_book.entries.push(normalizeLoreEntry({},i));renderLore();changed();};
 [$("#tags"),$("#creator"),$("#version")].forEach(el=>el.addEventListener("input",()=>{card.data.tags=($(`#tags`) as HTMLInputElement).value.split(",").map(x=>x.trim()).filter(Boolean);card.data.creator=($(`#creator`) as HTMLInputElement).value;card.data.character_version=($(`#version`) as HTMLInputElement).value;changed();}));
-document.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("active",x===b));document.querySelectorAll(".tab-page").forEach(x=>x.classList.toggle("active",x.id===`tab-${b.dataset.tab}`));});
+document.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(b=>b.onclick=()=>selectTab(b.dataset.tab!));
 window.addEventListener("dragover",e=>e.preventDefault());window.addEventListener("drop",async e=>{e.preventDefault();const f=e.dataTransfer?.files[0];if(f)try{await importFile(f);}catch(err){toast(err instanceof Error?err.message:String(err),true);}});
 renderAll(); setTimeout(()=>$("#refreshModels").click(),150);
+
+const wizardSteps: { field: EditableField; title: string; help: string; instruction: string }[] = [
+  { field: "name", title: "Name und Identität", help: "Trage einen Namen, einen Arbeitstitel oder nur eine Namensidee ein.", instruction: "Entwickle einen passenden, einprägsamen Charakternamen aus den Notizen. Gib ausschließlich den Namen im Namensfeld zurück." },
+  { field: "description", title: "Konzept, Aussehen und Hintergrund", help: "Stichpunkte reichen: Rolle, Alter, Erscheinung, Herkunft, Fähigkeiten, Eigenheiten oder lose Ideen.", instruction: "Erstelle eine klar strukturierte Character-Card-Beschreibung aus den Notizen. Behalte Persönlichkeit, Szenario und Rollenspielregeln aus diesem Feld heraus." },
+  { field: "personality", title: "Persönlichkeit und Motivation", help: "Wie denkt und fühlt die Figur? Ziele, Ängste, Widersprüche, Grenzen und typische Reaktionen.", instruction: "Entwickle aus den Notizen eine nuancierte, spielbare Persönlichkeit mit Motivationen, Schwächen und konsistentem Verhalten." },
+  { field: "scenario", title: "Szenario und Ausgangslage", help: "Wo beginnt das Rollenspiel, was ist gerade passiert und warum interagieren {{char}} und {{user}}?", instruction: "Forme die Notizen zu einem offenen Rollenspielszenario. Lege {{user}} keine Handlungen, Gefühle oder Identität fest." },
+  { field: "first_mes", title: "Erste Nachricht", help: "Skizziere Atmosphäre, Handlung oder einen Gesprächsaufhänger. Ein einzelner Satz oder eine Idee genügt.", instruction: "Schreibe einen fesselnden ersten Beitrag mit Atmosphäre, sichtbarer Handlung und Gesprächsanlass. Sprich niemals für {{user}}." },
+  { field: "mes_example", title: "Dialogbeispiele", help: "Nenne gewünschte Stimme, Redewendungen oder Situationen. Ollama erzeugt daraus abwechslungsreiche Beispiele.", instruction: "Erstelle 3 bis 5 kontrastreiche Dialogwechsel im SillyTavern-Format mit <START>, {{user}}: und {{char}}:. Zeige Stimme und emotionale Bandbreite." },
+  { field: "system_prompt", title: "Rollenspielregeln", help: "Optional: Regeln zu Perspektive, Initiative, Erzählstil, Grenzen und Verhalten.", instruction: "Formuliere kurze, robuste Rollenspielregeln. Bewahre Charaktertreue und verbiete das Sprechen oder Entscheiden für {{user}}." }
+];
+const wizardDrafts: Partial<Record<EditableField, string>> = {};
+
+async function openLibraryCard(bytes: Uint8Array, entry: LibraryEntry) {
+  const buffer = bytes.slice().buffer as ArrayBuffer;
+  if (entry.format === "PNG") {
+    const parsed = extractCard(buffer);
+    if (!parsed) throw new Error("Die PNG-Datei enthält keine lesbare Character Card.");
+    card = parsed;
+    imageBuffer = buffer;
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    imageUrl = URL.createObjectURL(new Blob([buffer], { type: "image/png" }));
+  } else {
+    card = normalizeCard(JSON.parse(new TextDecoder().decode(bytes)));
+    imageBuffer = null;
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    imageUrl = "";
+  }
+  linkedPath = entry.path;
+  linkedFormat = entry.format;
+  score = localScore(card);
+  renderAll();
+  syncLinkedButtons();
+  saveDraft();
+  toast(card.data.name + " aus SillyTavern geöffnet.");
+}
+
+async function currentBytes(format: "PNG" | "JSON"): Promise<Uint8Array> {
+  if (format === "JSON") return new TextEncoder().encode(JSON.stringify(card, null, 2));
+  if (!imageBuffer) throw new Error("Für eine PNG-Karte wird ein Portrait benötigt.");
+  return new Uint8Array(await embedCard(imageBuffer, card).arrayBuffer());
+}
+
+function syncLinkedButtons() {
+  $("#saveLinkedBtn").classList.toggle("hidden", !linkedPath);
+  $("#versionsBtn").classList.toggle("hidden", !linkedPath);
+  $("#addFolderBtn").classList.toggle("hidden", !!linkedPath || !library.folder);
+  $("#saveState").textContent = linkedPath ? "Mit ST verknüpft" : "Lokal gespeichert";
+}
+
+async function saveLinkedCard() {
+  if (!linkedPath || !linkedFormat) return;
+  try {
+    await library.save(linkedPath, await currentBytes(linkedFormat));
+    toast("In SillyTavern gespeichert · vorherige Version gesichert.");
+  } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
+}
+
+async function addCurrentToFolder() {
+  try {
+    const bytes = await currentBytes("PNG");
+    linkedPath = await library.add(card.data.name || "character", bytes);
+    linkedFormat = "PNG";
+    syncLinkedButtons();
+    toast("Karte zum gekoppelten SillyTavern-Ordner hinzugefügt.");
+  } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
+}
+
+async function showVersions() {
+  if (!linkedPath) return;
+  try {
+    const versions = await library.versions(linkedPath);
+    $("#versionList").innerHTML = versions.map(version => {
+      const date = new Date(version.created).toLocaleString();
+      const size = Math.max(1, Math.round(version.size / 1024));
+      return '<div class="version-item"><span><b>' + escapeHtml(date) + '</b><small>' + size + ' KB</small></span><button class="ghost" data-restore="' + escapeAttr(version.id) + '">Wiederherstellen</button></div>';
+    }).join("") || '<p class="muted">Noch keine frühere Version vorhanden. Sie entsteht beim ersten Speichern.</p>';
+    $("#versionModal").classList.remove("hidden");
+    document.querySelectorAll<HTMLButtonElement>("[data-restore]").forEach(button => button.onclick = async () => {
+      if (!linkedPath || !confirm("Diese Version wiederherstellen? Der aktuelle Stand wird vorher ebenfalls gesichert.")) return;
+      await library.restore(linkedPath, button.dataset.restore!);
+      $("#versionModal").classList.add("hidden");
+      toast("Version wiederhergestellt.");
+    });
+  } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
+}
+
+function renderWizard() {
+  const done = wizardStep >= wizardSteps.length;
+  $(".wizard-card").classList.toggle("hidden", done);
+  $("#wizardDone").classList.toggle("hidden", !done);
+  if (done) return;
+  const step = wizardSteps[wizardStep];
+  $("#wizardCount").textContent = "Schritt " + (wizardStep + 1) + " von " + wizardSteps.length;
+  ($("#wizardBar") as HTMLElement).style.width = ((wizardStep + 1) / wizardSteps.length * 100) + "%";
+  $("#wizardTitle").textContent = step.title;
+  $("#wizardHelp").textContent = step.help;
+  ($("#wizardNotes") as HTMLTextAreaElement).value = wizardDrafts[step.field] ?? "";
+  $("#wizardCurrent").textContent = card.data[step.field] || "Noch leer";
+  ($("#wizardBack") as HTMLButtonElement).disabled = wizardStep === 0;
+  $("#wizardNext").textContent = wizardStep === wizardSteps.length - 1 ? "Abschließen →" : "Weiter →";
+}
+
+function useWizardNotes() {
+  const step = wizardSteps[wizardStep];
+  const notes = ($("#wizardNotes") as HTMLTextAreaElement).value.trim();
+  wizardDrafts[step.field] = notes;
+  if (notes) card.data[step.field] = notes;
+  renderAll();
+  renderWizard();
+  changed();
+  toast("Notizen in " + step.title + " übernommen.");
+}
+
+async function expandWizardStep() {
+  const step = wizardSteps[wizardStep];
+  const notes = ($("#wizardNotes") as HTMLTextAreaElement).value.trim();
+  wizardDrafts[step.field] = notes;
+  const temp = structuredClone(card);
+  if (notes) temp.data[step.field] = notes;
+  ($("#wizardAi") as HTMLButtonElement).disabled = true;
+  $("#wizardAi").textContent = "Ollama arbeitet …";
+  try {
+    const result = await runAi({
+      baseUrl: ($("#ollamaUrl") as HTMLInputElement).value,
+      model: ($("#model") as HTMLSelectElement).value,
+      action: "edit",
+      card: temp,
+      selected: [step.field],
+      instruction: step.instruction + (notes ? " Verwende diese Nutzernotizen als verbindliche Grundlage: " + notes : ""),
+      language: ($("#language") as HTMLSelectElement).value,
+      nsfw: ($("#nsfw") as HTMLInputElement).checked
+    });
+    const value = result.fields?.[step.field];
+    if (!value) throw new Error("Ollama hat für dieses Feld keinen Text zurückgegeben.");
+    card.data[step.field] = value;
+    renderAll();
+    renderWizard();
+    changed();
+    toast(step.title + " wurde ausgearbeitet.");
+  } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
+  finally {
+    ($("#wizardAi") as HTMLButtonElement).disabled = false;
+    $("#wizardAi").textContent = "✦ Mit Ollama ausarbeiten";
+  }
+}
+
+function selectTab(name: string) {
+  document.querySelectorAll("[data-tab]").forEach(element => element.classList.toggle("active", (element as HTMLElement).dataset.tab === name));
+  document.querySelectorAll(".tab-page").forEach(element => element.classList.toggle("active", element.id === "tab-" + name));
+  if (name === "wizard") renderWizard();
+}
+
+const library = new CardLibrary(openLibraryCard);
+library.mount($("#libraryHost"));
+window.addEventListener("library-folder-changed", syncLinkedButtons);
+syncLinkedButtons();
+renderWizard();
+$("#saveLinkedBtn").onclick = () => void saveLinkedCard();
+$("#addFolderBtn").onclick = () => void addCurrentToFolder();
+$("#versionsBtn").onclick = () => void showVersions();
+$("#closeVersions").onclick = () => $("#versionModal").classList.add("hidden");
+$("#versionModal").addEventListener("click", event => { if (event.target === $("#versionModal")) $("#versionModal").classList.add("hidden"); });
+$("#wizardBack").onclick = () => { if (wizardStep > 0) wizardStep--; renderWizard(); };
+$("#wizardNext").onclick = () => {
+  const step = wizardSteps[wizardStep];
+  const notes = ($("#wizardNotes") as HTMLTextAreaElement).value.trim();
+  wizardDrafts[step.field] = notes;
+  if (notes && !card.data[step.field]) card.data[step.field] = notes;
+  wizardStep++;
+  renderAll();
+  renderWizard();
+  changed();
+};
+$("#wizardUse").onclick = useWizardNotes;
+$("#wizardAi").onclick = () => void expandWizardStep();
+$("#wizardFinish").onclick = () => selectTab("fields");
