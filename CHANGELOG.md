@@ -2,6 +2,26 @@
 
 All notable changes to Silly EasyChar are documented here. Each release lists English notes first, followed by the German translation.
 
+## v0.2.5
+
+### English
+
+- Added a bundled default portrait so cards without a selected image can still be saved and exported as valid Character Card PNG files.
+- Added fully local portrait cropping with a 4:5 frame, drag positioning, zoom, an original-image option, and 768 × 960 PNG output.
+- Fixed loading-spinner stutter by keeping the animation element intact while its elapsed-seconds counter updates.
+- Cleared the AI editing instruction and previous result whenever a new, imported, or SillyTavern-library card is opened.
+- Added System Prompt and Post-History Instructions to the individually selectable Ollama editing fields.
+- Added the SillyTavern Talkativeness setting as a 0–100% slider, stored in the compatible card extension field.
+
+### Deutsch
+
+- Ein eingebautes Standardportrait ergänzt, damit Karten ohne ausgewähltes Bild trotzdem als gültige Character-Card-PNG gespeichert und exportiert werden können.
+- Vollständig lokalen Portraitzuschnitt mit 4:5-Rahmen, Verschieben, Zoom, Originalbild-Option und einer PNG-Ausgabe mit 768 × 960 Pixeln hinzugefügt.
+- Ruckeln des Ladekreises behoben: Das Animationselement bleibt nun bestehen, während die verstrichenen Sekunden aktualisiert werden.
+- KI-Bearbeitungsanweisung und vorheriges Ergebnis werden beim Öffnen einer neuen, importierten oder aus der SillyTavern-Bibliothek geladenen Karte geleert.
+- System Prompt und Post-History Instructions zu den einzeln auswählbaren Ollama-Bearbeitungsfeldern hinzugefügt.
+- Die SillyTavern-Einstellung Talkativeness als 0–100-%-Regler ergänzt und im kompatiblen Extension-Feld der Karte gespeichert.
+
 ## v0.2.4
 
 ### English

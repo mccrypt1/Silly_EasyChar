@@ -20,7 +20,7 @@ export const emptyData = (): CharacterData => ({
   tags: [],
   creator: "",
   character_version: "1.0",
-  extensions: {},
+  extensions: { talkativeness: "0.5" },
   character_book: null
 });
 
@@ -39,7 +39,11 @@ export function normalizeCard(input: any): CharacterCard {
     mes_example: String(source.mes_example ?? source.example_dialogue ?? ""),
     alternate_greetings: Array.isArray(source.alternate_greetings) ? source.alternate_greetings.map(String) : [],
     tags: Array.isArray(source.tags) ? source.tags.map(String) : [],
-    extensions: source.extensions && typeof source.extensions === "object" ? source.extensions : {},
+    extensions: {
+      ...defaults.extensions,
+      ...(source.extensions && typeof source.extensions === "object" ? source.extensions : {}),
+      ...(source.talkativeness != null && source.extensions?.talkativeness == null ? { talkativeness: String(source.talkativeness) } : {})
+    },
     group_only_greetings: Array.isArray(source.group_only_greetings) ? source.group_only_greetings.map(String) : [],
     assets: Array.isArray(source.assets) ? source.assets : defaults.assets,
     creation_date: Number.isFinite(source.creation_date) ? Number(source.creation_date) : defaults.creation_date,

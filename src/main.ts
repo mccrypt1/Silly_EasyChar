@@ -1,5 +1,6 @@
 import "./style.css";
 import { emptyCard, localScore, normalizeCard, normalizeLoreEntry, normalizePlaceholders, prepareCardForExport, toV3Card } from "./card";
+import defaultPortraitUrl from "./assets/default-portrait.jpg";
 import { embedCard, extractCard, imageAsPng } from "./png";
 import { models, runAi } from "./ai";
 import { CardLibrary } from "./library";
@@ -18,6 +19,7 @@ const textFields: { key: CoreEditableField; label: string; rows: number; hint: s
   { key: "post_history_instructions", label: "Post-History Instructions", rows: 4, hint: "Optional: spät injizierte Anweisungen …" }
 ];
 
+const aiFields = textFields.filter(field => field.key !== "creator_notes");
 let card = loadDraft();
 let imageBuffer: ArrayBuffer | null = null;
 let imageUrl = "";
@@ -29,6 +31,13 @@ let statusTimer = 0;
 let linkedPath: string | null = null;
 let linkedFormat: "PNG" | "JSON" | null = null;
 let wizardStep = 0;
+let defaultImagePromise: Promise<ArrayBuffer> | null = null;
+let cropBitmap: ImageBitmap | null = null;
+let cropCandidate: ArrayBuffer | null = null;
+let cropBaseScale = 1;
+let cropScale = 1;
+let cropOffsetX = 0;
+let cropOffsetY = 0;
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
@@ -47,8 +56,8 @@ app.innerHTML = `
       <section class="library-card" id="libraryHost"></section>
         <div id="portrait" class="portrait"><span>Bild hinzufügen</span></div>
         <input id="imageInput" type="file" accept="image/*" hidden />
-        <button id="imageBtn" class="wide ghost">Portrait wählen</button>
-        <p>Keine Bildbearbeitung. Das Originalbild wird als Character-Card-PNG verpackt.</p>
+        <button id="imageBtn" class="wide ghost">Portrait wählen</button><button id="cropImageBtn" class="wide ghost hidden">Portrait zuschneiden</button>
+        <p>Portraits können lokal im Format 4:5 zugeschnitten werden. Ohne eigenes Bild wird das eingebaute Standardportrait verwendet.</p>
       </section>
       <section class="settings-card">
         <div class="section-title">OLLAMA</div>
@@ -66,6 +75,7 @@ app.innerHTML = `
       </div>
       <div id="tab-extras" class="tab-page"><div class="extras-grid">
         <label>Tags (durch Komma getrennt)<input id="tags" /></label><label>Creator<input id="creator" /></label><label>Version<input id="version" /></label>
+        <label class="full talkativeness">Talkativeness · Gruppenchat-Antwortchance <output id="talkativenessValue">50%</output><input id="talkativeness" type="range" min="0" max="100" step="1" value="50" /><small>0% = sehr zurückhaltend · 50% = normal · 100% = sehr gesprächig</small></label>
       </div></div>
       <div id="tab-lore" class="tab-page"><div class="lore-head"><div><h2>Character Lorebook</h2><p>Schlüsselwortgesteuerte Details für Orte, Figuren, Regeln und Gegenstände.</p></div><button id="addLore" class="ghost">＋ Eintrag</button></div><div id="loreEntries"></div></div>
     </section>
@@ -95,6 +105,7 @@ app.innerHTML = `
   </main>
   <div id="versionModal" class="modal hidden"><div class="modal-card"><div class="field-head"><h3>Letzte Kartenversionen</h3><button id="closeVersions">×</button></div><p>Vor jedem Speichern wird automatisch eine Version angelegt. Maximal drei werden behalten.</p><div id="versionList"></div></div></div>
   <div id="reviewModal" class="modal review-modal hidden"><div class="review-card"><div class="field-head"><h3>Änderungen prüfen</h3><button id="closeReview">×</button></div><div class="review-request"><span>DEINE ANWEISUNG</span><p id="reviewRequest"></p></div><div class="review-actions"><button id="acceptAllReview" class="primary">✓ Alle übernehmen</button><button id="rejectReview" class="ghost">✕ Alle ablehnen</button></div><div id="reviewFields"></div><div class="review-footer"><button id="applyReview" class="primary">Ausgewählte Änderungen übernehmen</button></div></div></div>
+  <div id="cropModal" class="modal crop-modal hidden"><div class="crop-card"><div class="field-head"><h3>Portrait zuschneiden</h3><button id="closeCrop">×</button></div><p>Bild verschieben und mit dem Regler zoomen. Der Export wird als 4:5-PNG mit 768 × 960 Pixeln gespeichert.</p><canvas id="cropCanvas" width="768" height="960"></canvas><label>Zoom<input id="cropZoom" type="range" min="1" max="3" step="0.01" value="1" /></label><div class="crop-actions"><button id="cropOriginal" class="ghost">Original verwenden</button><button id="applyCrop" class="primary">Zuschnitt übernehmen</button></div></div></div>
   <div id="toast"></div><input id="fileInput" type="file" accept=".json,.png,application/json,image/png" hidden />`;
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
@@ -114,7 +125,7 @@ function renderFields() {
 }
 function greetingField(index: number): EditableField { return `alternate_greeting:${index}`; }
 function renderChecks() {
-  const core = textFields.slice(0, 6).map(f => `<label class="check"><input type="checkbox" data-check="${f.key}" ${selected.has(f.key) ? "checked" : ""}/><span>${f.label}</span></label>`).join("");
+  const core = aiFields.map(f => `<label class="check"><input type="checkbox" data-check="${f.key}" ${selected.has(f.key) ? "checked" : ""}/><span>${f.label}</span></label>`).join("");
   const greetings = card.data.alternate_greetings.map((_, index) => { const key = greetingField(index); return `<label class="check"><input type="checkbox" data-check="${key}" ${selected.has(key) ? "checked" : ""}/><span>Alternative Begrüßung ${index + 1}</span></label>`; }).join("");
   $("#fieldChecks").innerHTML = core + greetings;
   document.querySelectorAll<HTMLInputElement>("[data-check]").forEach(c => c.onchange = () => { const k = c.dataset.check as EditableField; c.checked ? selected.add(k) : selected.delete(k); });
@@ -129,8 +140,21 @@ function removeGreeting(index: number) {
   card.data.alternate_greetings.splice(index, 1);
   renderExtras(); renderChecks(); changed();
 }
+function talkativenessPercent(): number {
+  const raw = Number(card.data.extensions.talkativeness ?? 0.5);
+  return Math.round(Math.max(0, Math.min(100, raw <= 1 ? raw * 100 : raw)));
+}
 function renderExtras() {
   ($("#tags") as HTMLInputElement).value = card.data.tags.join(", "); ($("#creator") as HTMLInputElement).value = card.data.creator; ($("#version") as HTMLInputElement).value = card.data.character_version;
+  const talkativeness = talkativenessPercent();
+  ($("#talkativeness") as HTMLInputElement).value = String(talkativeness);
+  $("#talkativenessValue").textContent = talkativeness + "%";
+  ($("#talkativeness") as HTMLInputElement).oninput = event => {
+    const percent = Number((event.target as HTMLInputElement).value);
+    card.data.extensions.talkativeness = (percent / 100).toFixed(2);
+    $("#talkativenessValue").textContent = percent + "%";
+    changed();
+  };
   $("#greetings").innerHTML = card.data.alternate_greetings.map((g, i) => `<div class="repeat"><textarea rows="5" data-greeting="${i}" placeholder="Alternative Begrüßung ${i + 1}">${escapeHtml(g)}</textarea><button data-remove-greeting="${i}">×</button></div>`).join("") || `<p class="muted">Noch keine alternativen Begrüßungen.</p>`;
   document.querySelectorAll<HTMLTextAreaElement>("[data-greeting]").forEach(el => {
     el.oninput = () => { card.data.alternate_greetings[Number(el.dataset.greeting)] = el.value; changed(); };
@@ -148,10 +172,62 @@ function renderScore(s = score) {
   $("#scoreCard").innerHTML = `<div class="score-top"><div><span>KARTEN-SCORE</span><strong>${s.total}</strong><small>/ 100</small></div><button id="rescore">Lokal prüfen</button></div><div class="score-bars">${[["Struktur",s.structure],["Kohärenz",s.coherence],["Rollenspiel",s.roleplay],["Kreativität",s.creativity],["Politur",s.polish]].map(([n,v])=>`<label><span>${n}</span><i><b style="width:${Number(v)*5}%"></b></i><em>${v}/20</em></label>`).join("")}</div>${s.findings.length ? `<ul>${s.findings.slice(0,3).map(x=>`<li>${escapeHtml(x)}</li>`).join("")}</ul>` : `<p class="good">Keine offensichtlichen lokalen Probleme.</p>`}`;
   $("#rescore").onclick = () => { score = localScore(card); renderScore(); };
 }
-function renderPortrait() { const p=$("#portrait"); p.innerHTML = imageUrl ? `<img src="${imageUrl}" alt="Character portrait" />` : `<div class="placeholder-letter">${escapeHtml(card.data.name[0] || "?")}</div><span>Bild hinzufügen</span>`; }
+function renderPortrait() {
+  const p=$("#portrait"); p.innerHTML = `<img src="${imageUrl || defaultPortraitUrl}" alt="Character portrait" />${imageUrl ? "" : "<span>Standardportrait</span>"}`;
+  $("#cropImageBtn").classList.toggle("hidden", !imageBuffer);
+}
 function renderAll() { renderFields(); renderChecks(); renderExtras(); renderLore(); renderScore(); renderPortrait(); }
 
 function toast(message: string, bad=false) { const t=$("#toast"); t.textContent=message; t.className=bad?"show bad":"show"; setTimeout(()=>t.className="",3000); }
+function resetAiInstruction() {
+  ($("#instruction") as HTMLTextAreaElement).value = "";
+  $("#aiOutput").innerHTML = `<div class="empty-state"><span>✦</span><p>Wähle Felder und beschreibe deine Änderung – oder nutze eine Schnellaktion.</p></div>`;
+}
+async function defaultPortraitBuffer(): Promise<ArrayBuffer> {
+  defaultImagePromise ??= fetch(defaultPortraitUrl)
+    .then(response => {
+      if (!response.ok) throw new Error("Das eingebaute Standardportrait konnte nicht geladen werden.");
+      return response.blob();
+    })
+    .then(blob => imageAsPng(new File([blob], "default-portrait.jpg", { type: blob.type || "image/jpeg" })));
+  return defaultImagePromise;
+}
+function commitPortrait(buffer: ArrayBuffer) {
+  imageBuffer = buffer;
+  if (imageUrl) URL.revokeObjectURL(imageUrl);
+  imageUrl = URL.createObjectURL(new Blob([buffer], { type: "image/png" }));
+  renderPortrait();
+}
+function closeCrop() {
+  $("#cropModal").classList.add("hidden");
+  cropBitmap?.close();
+  cropBitmap = null;
+  cropCandidate = null;
+}
+function drawCrop() {
+  if (!cropBitmap) return;
+  const canvas = $("#cropCanvas") as HTMLCanvasElement;
+  const context = canvas.getContext("2d")!;
+  const width = cropBitmap.width * cropScale;
+  const height = cropBitmap.height * cropScale;
+  cropOffsetX = Math.max(Math.min(0, canvas.width - width), Math.min(0, cropOffsetX));
+  cropOffsetY = Math.max(Math.min(0, canvas.height - height), Math.min(0, cropOffsetY));
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(cropBitmap, cropOffsetX, cropOffsetY, width, height);
+}
+async function openCrop(buffer: ArrayBuffer) {
+  cropBitmap?.close();
+  cropCandidate = buffer;
+  cropBitmap = await createImageBitmap(new Blob([buffer], { type: "image/png" }));
+  const canvas = $("#cropCanvas") as HTMLCanvasElement;
+  cropBaseScale = Math.max(canvas.width / cropBitmap.width, canvas.height / cropBitmap.height);
+  cropScale = cropBaseScale;
+  cropOffsetX = (canvas.width - cropBitmap.width * cropScale) / 2;
+  cropOffsetY = (canvas.height - cropBitmap.height * cropScale) / 2;
+  ($("#cropZoom") as HTMLInputElement).value = "1";
+  drawCrop();
+  $("#cropModal").classList.remove("hidden");
+}
 
 function fieldValue(key: EditableField): string {
   if (key.startsWith("alternate_greeting:")) return card.data.alternate_greetings[Number(key.split(":")[1])] ?? "";
@@ -163,17 +239,16 @@ function fieldTitle(key: EditableField): string {
 }
 function startThinking(host: HTMLElement, label: string, hideWhenDone = false) {
   const started = Date.now();
-  let detail = label;
   let stopped = false;
   host.classList.remove("hidden");
-  const render = () => {
-    const seconds = Math.floor((Date.now() - started) / 1000);
-    host.innerHTML = `<div class="thinking"><i></i><p>${escapeHtml(detail)} <strong>${seconds} s</strong></p></div>`;
-  };
-  render();
-  const interval = window.setInterval(render, 250);
+  host.innerHTML = `<div class="thinking"><i></i><p><span data-thinking-label></span><strong data-thinking-seconds>0 s</strong></p></div>`;
+  const labelNode = host.querySelector<HTMLElement>("[data-thinking-label]")!;
+  const secondsNode = host.querySelector<HTMLElement>("[data-thinking-seconds]")!;
+  labelNode.textContent = label;
+  const tick = () => { secondsNode.textContent = Math.floor((Date.now() - started) / 1000) + " s"; };
+  const interval = window.setInterval(tick, 250);
   return {
-    update(value: string) { detail = value; render(); },
+    update(value: string) { labelNode.textContent = value; },
     stop() {
       if (stopped) return;
       stopped = true;
@@ -229,11 +304,12 @@ async function loadBuildInfo() {
   try {
     const info = await window.__TAURI__?.core.invoke<{ version: string; commit: string }>("build_info");
     if (info) $("#buildInfo").textContent = `v${info.version} · ${info.commit}`;
-  } catch { $("#buildInfo").textContent = "v0.2.4 · development"; }
+  } catch { $("#buildInfo").textContent = "v0.2.5 · development"; }
 }
 async function importFile(file: File) {
   if (file.name.toLowerCase().endsWith(".json")) { card=normalizeCard(JSON.parse(await file.text())); imageBuffer=null; if(imageUrl)URL.revokeObjectURL(imageUrl); imageUrl=""; }
   else { const buffer=await file.arrayBuffer(); const found=extractCard(buffer); if (!found) throw new Error("Dieses PNG enthält keine Character-Card-Metadaten."); card=found; imageBuffer=buffer; if(imageUrl)URL.revokeObjectURL(imageUrl); imageUrl=URL.createObjectURL(file); }
+  resetAiInstruction();
   score=localScore(card); renderAll(); saveDraft(); toast(`${card.data.name} importiert.`);
 }
 async function ai(action: "edit"|"translate"|"suggest"|"grade"|"lorebook") {
@@ -310,9 +386,23 @@ function applyAiResult(r: AiResult, action: string) {
   $("#aiOutput").innerHTML=`<div class="result"><b>✓ ${action==="grade"?"Bewertung abgeschlossen":"Ergebnis übernommen"}</b>${r.explanation?`<p>${escapeHtml(r.explanation)}</p>`:""}${items?`<ol>${items}</ol>`:""}${r.score?`<p class="big-result">${r.score.total}<small>/100</small></p>`:""}${r.lorebook?`<p>${Object.keys(r.lorebook.entries).length} Lorebook-Einträge erstellt.</p>`:""}</div>`;
 }
 
-$("#newBtn").onclick=()=>{if(!confirm("Aktuelle Karte durch eine neue ersetzen? Der letzte Stand bleibt nur im lokalen Entwurf."))return; card=emptyCard(); imageBuffer=null;if(imageUrl)URL.revokeObjectURL(imageUrl);imageUrl="";linkedPath=null;linkedFormat=null;wizardStep=0;score=localScore(card);renderAll();syncLinkedButtons();changed();};
+$("#newBtn").onclick=()=>{if(!confirm("Aktuelle Karte durch eine neue ersetzen? Der letzte Stand bleibt nur im lokalen Entwurf."))return; card=emptyCard(); imageBuffer=null;if(imageUrl)URL.revokeObjectURL(imageUrl);imageUrl="";linkedPath=null;linkedFormat=null;wizardStep=0;resetAiInstruction();score=localScore(card);renderAll();syncLinkedButtons();changed();};
 $("#importBtn").onclick=()=>$("#fileInput").click(); $("#fileInput").onchange=async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(f)try{linkedPath=null;linkedFormat=null;await importFile(f);syncLinkedButtons();}catch(err){toast(err instanceof Error?err.message:String(err),true);}};
-$("#imageBtn").onclick=()=>$("#imageInput").click(); $("#portrait").onclick=()=>$("#imageInput").click(); $("#imageInput").onchange=async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(!f)return;imageBuffer=await imageAsPng(f);if(imageUrl)URL.revokeObjectURL(imageUrl);imageUrl=URL.createObjectURL(new Blob([imageBuffer],{type:"image/png"}));renderPortrait();toast("Portrait übernommen.");};
+$("#imageBtn").onclick=()=>$("#imageInput").click(); $("#portrait").onclick=()=>$("#imageInput").click(); $("#imageInput").onchange=async e=>{const input=e.target as HTMLInputElement;const f=input.files?.[0];if(!f)return;try{await openCrop(await imageAsPng(f));}catch(error){toast(error instanceof Error?error.message:String(error),true);}finally{input.value="";}};
+$("#cropImageBtn").onclick=()=>{if(imageBuffer)void openCrop(imageBuffer);};
+$("#closeCrop").onclick=closeCrop;
+$("#cropModal").addEventListener("click",event=>{if(event.target===$("#cropModal"))closeCrop();});
+const cropCanvas=$("#cropCanvas") as HTMLCanvasElement;
+let cropDragging=false;
+let cropPointerX=0;
+let cropPointerY=0;
+cropCanvas.onpointerdown=event=>{cropDragging=true;cropPointerX=event.clientX;cropPointerY=event.clientY;cropCanvas.setPointerCapture(event.pointerId);};
+cropCanvas.onpointermove=event=>{if(!cropDragging)return;const factor=cropCanvas.width/cropCanvas.clientWidth;cropOffsetX+=(event.clientX-cropPointerX)*factor;cropOffsetY+=(event.clientY-cropPointerY)*factor;cropPointerX=event.clientX;cropPointerY=event.clientY;drawCrop();};
+cropCanvas.onpointerup=event=>{cropDragging=false;if(cropCanvas.hasPointerCapture(event.pointerId))cropCanvas.releasePointerCapture(event.pointerId);};
+cropCanvas.onpointercancel=()=>{cropDragging=false;};
+$("#cropZoom").oninput=event=>{const nextScale=cropBaseScale*Number((event.target as HTMLInputElement).value);const ratio=nextScale/cropScale;cropOffsetX=cropCanvas.width/2-(cropCanvas.width/2-cropOffsetX)*ratio;cropOffsetY=cropCanvas.height/2-(cropCanvas.height/2-cropOffsetY)*ratio;cropScale=nextScale;drawCrop();};
+$("#cropOriginal").onclick=()=>{if(cropCandidate)commitPortrait(cropCandidate);closeCrop();toast("Originalportrait \u00fcbernommen.");};
+$("#applyCrop").onclick=async()=>{try{const blob=await new Promise<Blob>((resolve,reject)=>cropCanvas.toBlob(value=>value?resolve(value):reject(new Error("Der Portraitzuschnitt konnte nicht erstellt werden.")),"image/png"));commitPortrait(await blob.arrayBuffer());closeCrop();toast("Portraitzuschnitt \u00fcbernommen.");}catch(error){toast(error instanceof Error?error.message:String(error),true);}};
 $("#jsonBtn").onclick=async()=>{
   try {
     const output=toV3Card(prepareCardForExport(card));
@@ -321,15 +411,15 @@ $("#jsonBtn").onclick=async()=>{
   } catch(error) { toast(error instanceof Error ? error.message : String(error), true); }
 };
 $("#pngBtn").onclick=async()=>{
-  if(!imageBuffer){toast("Bitte zuerst ein Portrait wählen.",true);return;}
   try {
     const output=prepareCardForExport(card);
-    const saved=await download(embedCard(imageBuffer,output),`${card.data.name||"character"}.png`);
+    const portrait=imageBuffer ?? await defaultPortraitBuffer();
+    const saved=await download(embedCard(portrait,output),`${card.data.name||"character"}.png`);
     if(saved) toast("Character-Card-PNG gespeichert.");
   } catch(error) { toast(error instanceof Error ? error.message : String(error), true); }
 };
 $("#refreshModels").onclick=async()=>{const url=($(`#ollamaUrl`) as HTMLInputElement).value;localStorage.setItem("ollamaUrl",url);const sel=$(`#model`) as HTMLSelectElement;sel.innerHTML=`<option>Lädt …</option>`;try{const list=await models(url);sel.innerHTML=list.map(m=>`<option>${escapeHtml(m)}</option>`).join("")||`<option value="">Keine Modelle gefunden</option>`;const last=localStorage.getItem("model");if(last&&list.includes(last))sel.value=last;toast(`${list.length} Ollama-Modelle gefunden.`);}catch(e){sel.innerHTML=`<option value="">Ollama nicht erreichbar</option>`;toast(e instanceof Error?e.message:String(e),true);}};
-$("#model").onchange=e=>localStorage.setItem("model",(e.target as HTMLSelectElement).value); $("#allFields").onclick=()=>{selected=new Set<EditableField>([...textFields.slice(0,6).map(x=>x.key),...card.data.alternate_greetings.map((_,index)=>greetingField(index))]);renderChecks();};
+$("#model").onchange=e=>localStorage.setItem("model",(e.target as HTMLSelectElement).value); $("#allFields").onclick=()=>{selected=new Set<EditableField>([...aiFields.map(x=>x.key),...card.data.alternate_greetings.map((_,index)=>greetingField(index))]);renderChecks();};
 $("#editAi").onclick=()=>ai("edit"); document.querySelectorAll<HTMLButtonElement>("[data-ai]").forEach(b=>b.onclick=()=>ai(b.dataset.ai as any));
 $("#addGreeting").onclick=()=>{const index=card.data.alternate_greetings.push("")-1;selected.add(greetingField(index));renderExtras();renderChecks();changed();};
 $("#addLore").onclick=()=>{if(!card.data.character_book)card.data.character_book={name:`${card.data.name} Lorebook`,entries:[]};const i=card.data.character_book.entries.length;card.data.character_book.entries.push(normalizeLoreEntry({},i));renderLore();changed();};
@@ -367,6 +457,7 @@ async function openLibraryCard(bytes: Uint8Array, entry: LibraryEntry) {
   linkedPath = entry.path;
   linkedFormat = entry.format;
   score = localScore(card);
+  resetAiInstruction();
   renderAll();
   syncLinkedButtons();
   saveDraft();
@@ -376,8 +467,8 @@ async function openLibraryCard(bytes: Uint8Array, entry: LibraryEntry) {
 async function currentBytes(format: "PNG" | "JSON"): Promise<Uint8Array> {
   const output = prepareCardForExport(card);
   if (format === "JSON") return new TextEncoder().encode(JSON.stringify(toV3Card(output), null, 2));
-  if (!imageBuffer) throw new Error("Für eine PNG-Karte wird ein Portrait benötigt.");
-  return new Uint8Array(await embedCard(imageBuffer, output).arrayBuffer());
+  const portrait = imageBuffer ?? await defaultPortraitBuffer();
+  return new Uint8Array(await embedCard(portrait, output).arrayBuffer());
 }
 
 function syncLinkedButtons() {

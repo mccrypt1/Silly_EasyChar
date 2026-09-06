@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CREATOR_NOTE_STAMP, emptyCard, normalizeCardPlaceholders, normalizeLoreEntry, normalizePlaceholders, prepareCardForExport, toV3Card } from "./card";
+import { CREATOR_NOTE_STAMP, emptyCard, normalizeCard, normalizeCardPlaceholders, normalizeLoreEntry, normalizePlaceholders, prepareCardForExport, toV3Card } from "./card";
 
 describe("SillyTavern placeholders", () => {
   it("normalizes bare and spaced user/char placeholders", () => {
@@ -55,4 +55,13 @@ describe("SillyTavern placeholders", () => {
     expect(entry.key).toBeUndefined();
     expect(entry.disable).toBeUndefined();
     expect(entry.order).toBeUndefined();
+  });
+
+  it("uses SillyTavern's default talkativeness value", () => {
+    expect(emptyCard().data.extensions.talkativeness).toBe("0.5");
+  });
+
+  it("preserves extension talkativeness and migrates a legacy root value", () => {
+    expect(normalizeCard({ data: { extensions: { talkativeness: "0.75" } } }).data.extensions.talkativeness).toBe("0.75");
+    expect(normalizeCard({ data: { talkativeness: "0.8" } }).data.extensions.talkativeness).toBe("0.8");
   });
