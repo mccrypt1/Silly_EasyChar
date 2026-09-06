@@ -1,5 +1,5 @@
 import "./style.css";
-import { emptyCard, localScore, normalizeCard, normalizeLoreEntry } from "./card";
+import { emptyCard, localScore, normalizeCard, normalizeCardPlaceholders, normalizeLoreEntry, normalizePlaceholders } from "./card";
 import { embedCard, extractCard, imageAsPng } from "./png";
 import { models, runAi } from "./ai";
 import { CardLibrary } from "./library";
@@ -61,10 +61,11 @@ app.innerHTML = `
     </aside>
     <section class="editor-panel">
       <nav class="tabs"><button data-tab="fields" class="active">Charakter</button><button data-tab="wizard">Wizard</button><button data-tab="extras">Extras</button><button data-tab="lore">Lorebook</button><span id="saveState">Lokal gespeichert</span></nav>
-      <div id="tab-fields" class="tab-page active"><div id="fields" class="fields"></div></div>
+      <div id="tab-fields" class="tab-page active"><div id="fields" class="fields"></div>
+        <section class="field greeting-editor" style="max-width:900px;margin:0 auto 13px"><div class="field-head"><label>Alternative Begrüßungen</label><button id="addGreeting" class="mini">＋ Begrüßung hinzufügen</button></div><p class="muted">Zusätzliche Einstiege, die in SillyTavern neben der ersten Nachricht auswählbar sind.</p><div id="greetings"></div></section>
+      </div>
       <div id="tab-extras" class="tab-page"><div class="extras-grid">
         <label>Tags (durch Komma getrennt)<input id="tags" /></label><label>Creator<input id="creator" /></label><label>Version<input id="version" /></label>
-        <div class="full"><div class="field-head"><label>Alternative Begrüßungen</label><button id="addGreeting" class="mini">＋ Hinzufügen</button></div><div id="greetings"></div></div>
       </div></div>
       <div id="tab-lore" class="tab-page"><div class="lore-head"><div><h2>Character Lorebook</h2><p>Schlüsselwortgesteuerte Details für Orte, Figuren, Regeln und Gegenstände.</p></div><button id="addLore" class="ghost">＋ Eintrag</button></div><div id="loreEntries"></div></div>
     </section>
@@ -106,6 +107,7 @@ function renderFields() {
   document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("[data-field]").forEach(el => {
     el.addEventListener("focus", () => { activeField = el.dataset.field as EditableField; document.querySelectorAll(".field").forEach(n => n.classList.toggle("focused", (n as HTMLElement).dataset.key === activeField)); });
     el.addEventListener("input", () => { card.data[el.dataset.field as EditableField] = el.value; el.closest(".field")!.querySelector("span")!.textContent = `${el.value.length} Zeichen`; changed(); });
+    el.addEventListener("change", () => { const value = normalizePlaceholders(el.value); if (value !== el.value) { el.value = value; card.data[el.dataset.field as EditableField] = value; changed(); } });
   });
 }
 function renderChecks() {
@@ -149,6 +151,12 @@ async function ai(action: "edit"|"translate"|"suggest"|"grade"|"lorebook") {
 function applyAiResult(r: AiResult, action: string) {
   if(r.fields){ for(const [k,v] of Object.entries(r.fields)) if(typeof v==="string" && selected.has(k as EditableField)) (card.data as any)[k]=v; renderFields(); changed(); }
   if(r.score){ score=r.score; renderScore(r.score); }
+  if(action==="grade" && r.score?.findings.length){
+    const instruction = $("#instruction") as HTMLTextAreaElement;
+    instruction.value = r.score.findings.map((finding, index) => `${index + 1}. ${finding}`).join("\n");
+    instruction.focus();
+    toast("Verbesserungsvorschläge wurden ins Bearbeitungsfeld übernommen.");
+  }
   if(r.lorebook?.entries){ const list=Object.entries(r.lorebook.entries).sort(([a],[b])=>Number(a)-Number(b)).map(([,e],i)=>normalizeLoreEntry(e,i)); card.data.character_book={name:`${card.data.name} Lorebook`,description:"Mit Silly EasyChar und Ollama erstellt",entries:list}; renderLore(); changed(); }
   const items=r.suggestions?.map(x=>`<li>${escapeHtml(x)}</li>`).join("")||"";
   $("#aiOutput").innerHTML=`<div class="result"><b>✓ ${action==="grade"?"Bewertung abgeschlossen":"Ergebnis übernommen"}</b>${r.explanation?`<p>${escapeHtml(r.explanation)}</p>`:""}${items?`<ol>${items}</ol>`:""}${r.score?`<p class="big-result">${r.score.total}<small>/100</small></p>`:""}${r.lorebook?`<p>${Object.keys(r.lorebook.entries).length} Lorebook-Einträge erstellt.</p>`:""}</div>`;
@@ -157,8 +165,8 @@ function applyAiResult(r: AiResult, action: string) {
 $("#newBtn").onclick=()=>{if(!confirm("Aktuelle Karte durch eine neue ersetzen? Der letzte Stand bleibt nur im lokalen Entwurf."))return; card=emptyCard(); imageBuffer=null;if(imageUrl)URL.revokeObjectURL(imageUrl);imageUrl="";linkedPath=null;linkedFormat=null;wizardStep=0;score=localScore(card);renderAll();syncLinkedButtons();changed();};
 $("#importBtn").onclick=()=>$("#fileInput").click(); $("#fileInput").onchange=async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(f)try{linkedPath=null;linkedFormat=null;await importFile(f);syncLinkedButtons();}catch(err){toast(err instanceof Error?err.message:String(err),true);}};
 $("#imageBtn").onclick=()=>$("#imageInput").click(); $("#portrait").onclick=()=>$("#imageInput").click(); $("#imageInput").onchange=async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(!f)return;imageBuffer=await imageAsPng(f);if(imageUrl)URL.revokeObjectURL(imageUrl);imageUrl=URL.createObjectURL(new Blob([imageBuffer],{type:"image/png"}));renderPortrait();toast("Portrait übernommen.");};
-$("#jsonBtn").onclick=()=>download(new Blob([JSON.stringify(card,null,2)],{type:"application/json"}),`${card.data.name||"character"}.json`);
-$("#pngBtn").onclick=()=>{if(!imageBuffer){toast("Bitte zuerst ein Portrait wählen.",true);return;}download(embedCard(imageBuffer,card),`${card.data.name||"character"}.png`);toast("Character-Card-PNG erstellt.");};
+$("#jsonBtn").onclick=()=>{normalizeCardPlaceholders(card);renderAll();changed();download(new Blob([JSON.stringify(card,null,2)],{type:"application/json"}),`${card.data.name||"character"}.json`);};
+$("#pngBtn").onclick=()=>{if(!imageBuffer){toast("Bitte zuerst ein Portrait wählen.",true);return;}normalizeCardPlaceholders(card);renderAll();changed();download(embedCard(imageBuffer,card),`${card.data.name||"character"}.png`);toast("Character-Card-PNG erstellt.");};
 $("#refreshModels").onclick=async()=>{const url=($(`#ollamaUrl`) as HTMLInputElement).value;localStorage.setItem("ollamaUrl",url);const sel=$(`#model`) as HTMLSelectElement;sel.innerHTML=`<option>Lädt …</option>`;try{const list=await models(url);sel.innerHTML=list.map(m=>`<option>${escapeHtml(m)}</option>`).join("")||`<option value="">Keine Modelle gefunden</option>`;const last=localStorage.getItem("model");if(last&&list.includes(last))sel.value=last;toast(`${list.length} Ollama-Modelle gefunden.`);}catch(e){sel.innerHTML=`<option value="">Ollama nicht erreichbar</option>`;toast(e instanceof Error?e.message:String(e),true);}};
 $("#model").onchange=e=>localStorage.setItem("model",(e.target as HTMLSelectElement).value); $("#allFields").onclick=()=>{selected=new Set(textFields.slice(0,6).map(x=>x.key));renderChecks();};
 $("#editAi").onclick=()=>ai("edit"); document.querySelectorAll<HTMLButtonElement>("[data-ai]").forEach(b=>b.onclick=()=>ai(b.dataset.ai as any));
@@ -205,6 +213,8 @@ async function openLibraryCard(bytes: Uint8Array, entry: LibraryEntry) {
 }
 
 async function currentBytes(format: "PNG" | "JSON"): Promise<Uint8Array> {
+  normalizeCardPlaceholders(card);
+  renderAll();
   if (format === "JSON") return new TextEncoder().encode(JSON.stringify(card, null, 2));
   if (!imageBuffer) throw new Error("Für eine PNG-Karte wird ein Portrait benötigt.");
   return new Uint8Array(await embedCard(imageBuffer, card).arrayBuffer());

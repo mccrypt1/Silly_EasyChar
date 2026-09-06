@@ -22,6 +22,12 @@ struct ChatRequest<'a> {
     stream: bool,
     messages: Vec<Message<'a>>,
     format: &'a str,
+    options: ChatOptions,
+}
+#[derive(Serialize)]
+struct ChatOptions {
+    num_predict: u32,
+    temperature: f32,
 }
 #[derive(Serialize)]
 struct Message<'a> {
@@ -93,6 +99,10 @@ async fn ollama_chat(
                 content: &prompt,
             },
         ],
+        options: ChatOptions {
+            num_predict: 6144,
+            temperature: 0.65,
+        },
     };
     let result = reqwest::Client::new()
         .post(format!("{base}/api/chat"))

@@ -1,4 +1,4 @@
-import type { CharacterCard, CharacterData, LoreEntry, ScoreResult } from "./types";
+import type { CharacterCard, CharacterData, EditableField, LoreEntry, ScoreResult } from "./types";
 
 export const emptyData = (): CharacterData => ({
   name: "Neue Figur",
@@ -36,7 +36,37 @@ export function normalizeCard(input: any): CharacterCard {
     extensions: source.extensions && typeof source.extensions === "object" ? source.extensions : {},
     character_book: normalizeBook(source.character_book)
   };
-  return { spec: "chara_card_v2", spec_version: "2.0", data };
+  return normalizeCardPlaceholders({ spec: "chara_card_v2", spec_version: "2.0", data });
+}
+
+const placeholderFields: EditableField[] = [
+  "description",
+  "personality",
+  "scenario",
+  "first_mes",
+  "mes_example",
+  "creator_notes",
+  "system_prompt",
+  "post_history_instructions"
+];
+
+export function normalizePlaceholders(text: string): string {
+  return text
+    .replace(/\{\{\s*user\s*\}\}/giu, "{{user}}")
+    .replace(/\{\{\s*char\s*\}\}/giu, "{{char}}")
+    .replace(/(^|[^\p{L}\p{N}_{])user(?=$|[^\p{L}\p{N}_}])/giu, "$1{{user}}")
+    .replace(/(^|[^\p{L}\p{N}_{])char(?=$|[^\p{L}\p{N}_}])/giu, "$1{{char}}");
+}
+
+export function normalizeCardPlaceholders(card: CharacterCard): CharacterCard {
+  for (const field of placeholderFields) {
+    card.data[field] = normalizePlaceholders(card.data[field]);
+  }
+  card.data.alternate_greetings = card.data.alternate_greetings.map(normalizePlaceholders);
+  for (const entry of card.data.character_book?.entries ?? []) {
+    entry.content = normalizePlaceholders(entry.content);
+  }
+  return card;
 }
 
 function normalizeBook(book: any): CharacterData["character_book"] {
