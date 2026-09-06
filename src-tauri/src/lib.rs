@@ -217,17 +217,13 @@ fn allowed_card_path(path: &Path) -> bool {
             .unwrap_or(false)
 }
 
-fn collect_cards(dir: &Path, depth: usize, output: &mut Vec<LibraryCard>) {
-    if depth > 2 {
-        return;
-    }
+fn collect_cards(dir: &Path, output: &mut Vec<LibraryCard>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_cards(&path, depth + 1, output);
             continue;
         }
         if !allowed_card_path(&path) {
@@ -320,7 +316,7 @@ fn scan_character_folder(path: String) -> Result<Vec<LibraryCard>, String> {
         return Err("Der gekoppelte Ordner existiert nicht mehr.".into());
     }
     let mut cards = Vec::new();
-    collect_cards(&dir, 0, &mut cards);
+    collect_cards(&dir, &mut cards);
     cards.sort_by(|left, right| right.modified.cmp(&left.modified));
     Ok(cards)
 }
@@ -473,6 +469,37 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, vec!["300.png", "400.png", "500.png"]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn character_scan_ignores_cards_in_subfolders() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("silly-easychar-scan-test-{unique}"));
+        let backup_dir = dir.join("backups");
+        fs::create_dir_all(&backup_dir).unwrap();
+        fs::write(
+            dir.join("visible.json"),
+            r#"{"spec":"chara_card_v2","data":{"name":"Visible"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            backup_dir.join("hidden.json"),
+            r#"{"spec":"chara_card_v2","data":{"name":"Hidden"}}"#,
+        )
+        .unwrap();
+        let mut cards = Vec::new();
+        collect_cards(&dir, &mut cards);
+        assert_eq!(
+            cards
+                .iter()
+                .map(|card| card.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Visible"]
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 }
