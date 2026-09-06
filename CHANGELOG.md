@@ -2,6 +2,28 @@
 
 All notable changes to Silly EasyChar are documented here. Each release lists English notes first, followed by the German translation.
 
+## v0.2.4
+
+### English
+
+- Replaced WebView downloads with native Windows save dialogs so JSON and PNG exports are reliably written to disk.
+- Made the `mccrypt1` watermark open the repository through Windows and added the app version plus associated short Git commit in red.
+- Split multi-field edit and translation jobs into sequential per-field Ollama requests so every selected field is processed.
+- Preserved each existing field's source language during editing unless translation is explicitly requested.
+- Added animated loading indicators with live elapsed-second stopwatches to both the writing assistant and Wizard.
+- Added a review window showing before/after text for every generated field, with editable suggestions and individual acceptance controls.
+- Enforced SillyTavern dialogue examples as 3–5 separate `<START>` blocks using exact `{{user}}:` and `{{char}}:` prefixes.
+
+### Deutsch
+
+- WebView-Downloads durch native Windows-Speicherdialoge ersetzt, damit JSON- und PNG-Exporte zuverlässig auf die Festplatte geschrieben werden.
+- Das `mccrypt1`-Wasserzeichen öffnet das Repository jetzt über Windows; daneben stehen App-Version und zugehöriger kurzer Git-Commit in Rot.
+- Mehrfeld-Bearbeitungen und Übersetzungen werden in einzelne aufeinanderfolgende Ollama-Aufgaben zerlegt, damit jedes ausgewählte Feld bearbeitet wird.
+- Bei normalen Bearbeitungen bleibt die vorhandene Sprache jedes Feldes erhalten, solange keine Übersetzung ausdrücklich verlangt wird.
+- Animierte Ladeanzeigen mit sekundengenauer laufender Stoppuhr für Schreibassistent und Wizard hinzugefügt.
+- Neues Prüffenster mit Vorher-/Nachher-Ansicht, bearbeitbaren Vorschlägen und einzelner Auswahl vor der endgültigen Übernahme ergänzt.
+- Dialogbeispiele werden als 3–5 getrennte `<START>`-Blöcke mit den exakten Präfixen `{{user}}:` und `{{char}}:` angefordert.
+
 ## v0.2.3
 
 ### English

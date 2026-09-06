@@ -24,5 +24,22 @@ describe("Ollama result handling", () => {
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(result.fields?.["alternate_greeting:0"]).toBe(complete);
   });
+  it("requires SillyTavern dialogue blocks while preserving an existing field language", async () => {
+    const dialogue = [1, 2, 3].map(index =>
+      `<START>\n{{user}}: "Question ${index}?"\n{{char}}: *She considers it carefully.* "${"Detailed English character response. ".repeat(7)}"`
+    ).join("\n");
+    const invoke = vi.fn().mockResolvedValue(JSON.stringify({ fields: { mes_example: dialogue } }));
+    vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });
+    const card = emptyCard();
+    card.data.mes_example = "<START>\n{{user}}: Hello\n{{char}}: Hello there.";
+    await runAi({
+      baseUrl: "http://127.0.0.1:8787", model: "test", action: "edit", card,
+      selected: ["mes_example"], instruction: "Improve the examples", language: "Deutsch", nsfw: false
+    });
+    const request = invoke.mock.calls[0][1] as { prompt: string };
+    expect(request.prompt).toContain("Preserve the existing language");
+    expect(request.prompt).toContain("3–5 separate <START> blocks");
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
 });
 

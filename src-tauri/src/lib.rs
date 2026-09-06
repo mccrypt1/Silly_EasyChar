@@ -43,6 +43,40 @@ struct ChatMessage {
     content: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BuildInfo {
+    version: &'static str,
+    commit: &'static str,
+}
+
+#[tauri::command]
+fn build_info() -> BuildInfo {
+    BuildInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        commit: option_env!("SILLY_EASYCHAR_GIT_COMMIT").unwrap_or("development"),
+    }
+}
+
+#[tauri::command]
+fn open_repository() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("rundll32")
+            .args([
+                "url.dll,FileProtocolHandler",
+                "https://github.com/mccrypt1/Silly_EasyChar",
+            ])
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("Browser konnte nicht geöffnet werden: {error}"))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Der Repository-Link wird derzeit nur unter Windows unterstützt.".into())
+    }
+}
+
 fn safe_base_url(input: &str) -> Result<String, String> {
     let trimmed = input.trim().trim_end_matches('/');
     let parsed =
@@ -126,6 +160,9 @@ async fn ollama_chat(
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            build_info,
+            open_repository,
+            export_character_file,
             ollama_models,
             ollama_chat,
             choose_character_folder,
@@ -317,6 +354,41 @@ async fn choose_character_folder() -> Option<String> {
         .pick_folder()
         .await
         .map(|handle| handle.path().to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+async fn export_character_file(
+    file_name: String,
+    bytes: Vec<u8>,
+) -> Result<Option<String>, String> {
+    if bytes.len() > 64 * 1024 * 1024 {
+        return Err("Die Karte ist größer als 64 MB.".into());
+    }
+    let safe_name = Path::new(&file_name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Ungültiger Dateiname.".to_string())?
+        .to_string();
+    let extension = Path::new(&safe_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| "Die Exportdatei benötigt die Endung .json oder .png.".to_string())?;
+    if extension != "json" && extension != "png" {
+        return Err("Nur JSON- und PNG-Karten dürfen exportiert werden.".into());
+    }
+    let Some(handle) = rfd::AsyncFileDialog::new()
+        .set_title("Character Card exportieren")
+        .set_file_name(&safe_name)
+        .add_filter("Character Card", &[extension.as_str()])
+        .save_file()
+        .await
+    else {
+        return Ok(None);
+    };
+    fs::write(handle.path(), bytes)
+        .map_err(|error| format!("Export konnte nicht gespeichert werden: {error}"))?;
+    Ok(Some(handle.path().to_string_lossy().into_owned()))
 }
 
 #[tauri::command]

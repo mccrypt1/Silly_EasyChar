@@ -33,7 +33,7 @@ let wizardStep = 0;
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <header class="topbar">
-    <div class="brand"><div class="brand-mark">S</div><div><strong>Silly EasyChar</strong><small>Offline Character Studio</small></div><a class="brand-watermark" href="https://github.com/mccrypt1/Silly_EasyChar" target="_blank" rel="noreferrer" title="Silly EasyChar auf GitHub">mccrypt1</a></div>
+    <div class="brand"><div class="brand-mark">S</div><div><strong>Silly EasyChar</strong><small>Offline Character Studio</small></div><button id="repoLink" class="brand-watermark" title="Silly EasyChar auf GitHub öffnen">mccrypt1</button><span id="buildInfo" class="build-info">v… · …</span></div>
     <div class="top-actions">
       <button id="newBtn" class="ghost">＋ Neu</button><button id="importBtn" class="ghost">↥ Import</button>
       <button id="saveLinkedBtn" class="primary hidden">In SillyTavern speichern</button><button id="addFolderBtn" class="ghost hidden">Zum ST-Ordner</button>
@@ -79,6 +79,7 @@ app.innerHTML = `
             <textarea id="wizardNotes" rows="9"></textarea>
             <div class="wizard-preview"><span>Aktueller Feldinhalt</span><p id="wizardCurrent"></p></div>
             <div class="wizard-actions"><button id="wizardBack" class="ghost">← Zurück</button><button id="wizardUse" class="ghost">Notizen übernehmen</button><button id="wizardAi" class="primary">✦ Mit Ollama ausarbeiten</button><button id="wizardNext" class="ghost">Weiter →</button></div>
+            <div id="wizardThinking" class="hidden"></div>
           </div>
           <div class="wizard-done hidden" id="wizardDone"><span>✓</span><h2>Grundkarte vollständig</h2><p>Alle Inhalte wurden in die passenden Character-Card-Felder übernommen. Du kannst sie nun im normalen Editor verfeinern.</p><button id="wizardFinish" class="primary">Zum Character Editor</button></div>
         </div>
@@ -93,6 +94,7 @@ app.innerHTML = `
     </aside>
   </main>
   <div id="versionModal" class="modal hidden"><div class="modal-card"><div class="field-head"><h3>Letzte Kartenversionen</h3><button id="closeVersions">×</button></div><p>Vor jedem Speichern wird automatisch eine Version angelegt. Maximal drei werden behalten.</p><div id="versionList"></div></div></div>
+  <div id="reviewModal" class="modal review-modal hidden"><div class="review-card"><div class="field-head"><h3>Änderungen prüfen</h3><button id="closeReview">×</button></div><div class="review-request"><span>DEINE ANWEISUNG</span><p id="reviewRequest"></p></div><div class="review-actions"><button id="acceptAllReview" class="primary">✓ Alle übernehmen</button><button id="rejectReview" class="ghost">✕ Alle ablehnen</button></div><div id="reviewFields"></div><div class="review-footer"><button id="applyReview" class="primary">Ausgewählte Änderungen übernehmen</button></div></div></div>
   <div id="toast"></div><input id="fileInput" type="file" accept=".json,.png,application/json,image/png" hidden />`;
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
@@ -150,19 +152,138 @@ function renderPortrait() { const p=$("#portrait"); p.innerHTML = imageUrl ? `<i
 function renderAll() { renderFields(); renderChecks(); renderExtras(); renderLore(); renderScore(); renderPortrait(); }
 
 function toast(message: string, bad=false) { const t=$("#toast"); t.textContent=message; t.className=bad?"show bad":"show"; setTimeout(()=>t.className="",3000); }
-function download(blob: Blob, name: string) { const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name.replace(/[\\/:*?"<>|]/g,"_"); a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }
+
+function fieldValue(key: EditableField): string {
+  if (key.startsWith("alternate_greeting:")) return card.data.alternate_greetings[Number(key.split(":")[1])] ?? "";
+  return card.data[key as CoreEditableField];
+}
+function fieldTitle(key: EditableField): string {
+  if (key.startsWith("alternate_greeting:")) return "Alternative Begrüßung " + (Number(key.split(":")[1]) + 1);
+  return textFields.find(field => field.key === key)?.label ?? key;
+}
+function startThinking(host: HTMLElement, label: string, hideWhenDone = false) {
+  const started = Date.now();
+  let detail = label;
+  let stopped = false;
+  host.classList.remove("hidden");
+  const render = () => {
+    const seconds = Math.floor((Date.now() - started) / 1000);
+    host.innerHTML = `<div class="thinking"><i></i><p>${escapeHtml(detail)} <strong>${seconds} s</strong></p></div>`;
+  };
+  render();
+  const interval = window.setInterval(render, 250);
+  return {
+    update(value: string) { detail = value; render(); },
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      window.clearInterval(interval);
+      host.innerHTML = "";
+      if (hideWhenDone) host.classList.add("hidden");
+    }
+  };
+}
+async function reviewFieldChanges(fields: AiResult["fields"], request: string): Promise<AiResult["fields"] | null> {
+  const entries = Object.entries(fields ?? {}).filter((entry): entry is [EditableField, string] => typeof entry[1] === "string");
+  if (!entries.length) return fields;
+  const modal = $("#reviewModal");
+  $("#reviewRequest").textContent = request || "Allgemeine Verbesserung der ausgewählten Felder";
+  $("#reviewFields").innerHTML = entries.map(([key, after]) => `
+    <article class="review-field">
+      <div class="review-field-title"><label><input type="checkbox" data-review-check="${escapeAttr(key)}" checked /> ${escapeHtml(fieldTitle(key))}</label><span>✎ Geändert</span></div>
+      <div class="review-columns">
+        <label><small>VORHER</small><textarea readonly>${escapeHtml(fieldValue(key))}</textarea></label>
+        <b>→</b>
+        <label><small>NACHHER · BEARBEITBAR</small><textarea data-review-after="${escapeAttr(key)}">${escapeHtml(after)}</textarea></label>
+      </div>
+    </article>`).join("");
+  modal.classList.remove("hidden");
+  return new Promise(resolve => {
+    const finish = (value: AiResult["fields"] | null) => { modal.classList.add("hidden"); resolve(value); };
+    const collect = (all: boolean) => {
+      const accepted: AiResult["fields"] = {};
+      for (const [key] of entries) {
+        const checkbox = document.querySelector<HTMLInputElement>(`[data-review-check="${key}"]`);
+        if (all || checkbox?.checked) accepted[key] = document.querySelector<HTMLTextAreaElement>(`[data-review-after="${key}"]`)?.value ?? "";
+      }
+      return accepted;
+    };
+    $("#acceptAllReview").onclick = () => finish(collect(true));
+    $("#applyReview").onclick = () => finish(collect(false));
+    $("#rejectReview").onclick = () => finish(null);
+    $("#closeReview").onclick = () => finish(null);
+    modal.onclick = event => { if (event.target === modal) finish(null); };
+  });
+}
+async function download(blob: Blob, name: string): Promise<boolean> {
+  const safeName = name.replace(/[\\/:*?"<>|]/g, "_");
+  if (window.__TAURI__) {
+    const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
+    const saved = await window.__TAURI__.core.invoke<string | null>("export_character_file", { fileName: safeName, bytes });
+    return saved !== null;
+  }
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=safeName; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  return true;
+}
+async function loadBuildInfo() {
+  try {
+    const info = await window.__TAURI__?.core.invoke<{ version: string; commit: string }>("build_info");
+    if (info) $("#buildInfo").textContent = `v${info.version} · ${info.commit}`;
+  } catch { $("#buildInfo").textContent = "v0.2.4 · development"; }
+}
 async function importFile(file: File) {
   if (file.name.toLowerCase().endsWith(".json")) { card=normalizeCard(JSON.parse(await file.text())); imageBuffer=null; if(imageUrl)URL.revokeObjectURL(imageUrl); imageUrl=""; }
   else { const buffer=await file.arrayBuffer(); const found=extractCard(buffer); if (!found) throw new Error("Dieses PNG enthält keine Character-Card-Metadaten."); card=found; imageBuffer=buffer; if(imageUrl)URL.revokeObjectURL(imageUrl); imageUrl=URL.createObjectURL(file); }
   score=localScore(card); renderAll(); saveDraft(); toast(`${card.data.name} importiert.`);
 }
 async function ai(action: "edit"|"translate"|"suggest"|"grade"|"lorebook") {
-  if(aiBusy)return; aiBusy=true; document.body.classList.add("busy"); $("#aiOutput").innerHTML=`<div class="thinking"><i></i><p>Ollama arbeitet lokal …</p></div>`;
+  if(aiBusy)return;
+  aiBusy=true;
+  document.body.classList.add("busy");
+  const timer = startThinking($("#aiOutput"), "Ollama arbeitet lokal …");
+  const baseUrl = ($("#ollamaUrl") as HTMLInputElement).value;
+  const model = ($("#model") as HTMLSelectElement).value;
+  const instruction = ($("#instruction") as HTMLTextAreaElement).value;
+  const language = ($("#language") as HTMLSelectElement).value;
+  const nsfw = ($("#nsfw") as HTMLInputElement).checked;
+  const selectedFields = [...selected];
   try {
-    const result=await runAi({ baseUrl: $("#ollamaUrl") instanceof HTMLInputElement ? ($("#ollamaUrl") as HTMLInputElement).value : "", model: ($("#model") as HTMLSelectElement).value, action, card, selected:[...selected], instruction:($(`#instruction`) as HTMLTextAreaElement).value, language:($(`#language`) as HTMLSelectElement).value, nsfw:($(`#nsfw`) as HTMLInputElement).checked });
+    let result: AiResult;
+    if (action === "edit" || action === "translate") {
+      if (!selectedFields.length) throw new Error("Bitte mindestens ein Feld auswählen.");
+      const combinedFields: NonNullable<AiResult["fields"]> = {};
+      const explanations: string[] = [];
+      for (let index = 0; index < selectedFields.length; index++) {
+        const field = selectedFields[index];
+        timer.update(`Ollama bearbeitet ${fieldTitle(field)} · ${index + 1}/${selectedFields.length} …`);
+        const partial = await runAi({ baseUrl, model, action, card, selected: [field], instruction, language, nsfw });
+        Object.assign(combinedFields, partial.fields);
+        if (partial.explanation) explanations.push(partial.explanation);
+      }
+      result = { fields: combinedFields, explanation: explanations.join("\n") };
+    } else {
+      result = await runAi({ baseUrl, model, action, card, selected: selectedFields, instruction, language, nsfw });
+    }
+    timer.stop();
+    if ((action === "edit" || action === "translate") && result.fields) {
+      const reviewRequest = action === "translate" ? `Übersetzen nach ${language}` : instruction;
+      const reviewed = await reviewFieldChanges(result.fields, reviewRequest);
+      if (!reviewed) {
+        $("#aiOutput").innerHTML = `<div class="result"><b>Änderungen verworfen</b><p>Die Karte wurde nicht verändert.</p></div>`;
+        return;
+      }
+      result.fields = reviewed;
+    }
     applyAiResult(result, action);
-  } catch(e){ $("#aiOutput").innerHTML=`<div class="error"><b>Ollama-Fehler</b><p>${escapeHtml(e instanceof Error?e.message:String(e))}</p><small>Läuft Ollama und ist ein Modell installiert?</small></div>`; toast("KI-Aktion fehlgeschlagen.",true); }
-  finally { aiBusy=false; document.body.classList.remove("busy"); }
+  } catch(e){
+    timer.stop();
+    $("#aiOutput").innerHTML=`<div class="error"><b>Ollama-Fehler</b><p>${escapeHtml(e instanceof Error?e.message:String(e))}</p><small>Läuft Ollama und ist ein Modell installiert?</small></div>`;
+    toast("KI-Aktion fehlgeschlagen.",true);
+  } finally {
+    timer.stop();
+    aiBusy=false;
+    document.body.classList.remove("busy");
+  }
 }
 function applyAiResult(r: AiResult, action: string) {
   if(r.fields){
@@ -192,8 +313,21 @@ function applyAiResult(r: AiResult, action: string) {
 $("#newBtn").onclick=()=>{if(!confirm("Aktuelle Karte durch eine neue ersetzen? Der letzte Stand bleibt nur im lokalen Entwurf."))return; card=emptyCard(); imageBuffer=null;if(imageUrl)URL.revokeObjectURL(imageUrl);imageUrl="";linkedPath=null;linkedFormat=null;wizardStep=0;score=localScore(card);renderAll();syncLinkedButtons();changed();};
 $("#importBtn").onclick=()=>$("#fileInput").click(); $("#fileInput").onchange=async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(f)try{linkedPath=null;linkedFormat=null;await importFile(f);syncLinkedButtons();}catch(err){toast(err instanceof Error?err.message:String(err),true);}};
 $("#imageBtn").onclick=()=>$("#imageInput").click(); $("#portrait").onclick=()=>$("#imageInput").click(); $("#imageInput").onchange=async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(!f)return;imageBuffer=await imageAsPng(f);if(imageUrl)URL.revokeObjectURL(imageUrl);imageUrl=URL.createObjectURL(new Blob([imageBuffer],{type:"image/png"}));renderPortrait();toast("Portrait übernommen.");};
-$("#jsonBtn").onclick=()=>{const output=toV3Card(prepareCardForExport(card));download(new Blob([JSON.stringify(output,null,2)],{type:"application/json"}),`${card.data.name||"character"}.json`);};
-$("#pngBtn").onclick=()=>{if(!imageBuffer){toast("Bitte zuerst ein Portrait wählen.",true);return;}const output=prepareCardForExport(card);download(embedCard(imageBuffer,output),`${card.data.name||"character"}.png`);toast("Character-Card-PNG erstellt.");};
+$("#jsonBtn").onclick=async()=>{
+  try {
+    const output=toV3Card(prepareCardForExport(card));
+    const saved=await download(new Blob([JSON.stringify(output,null,2)],{type:"application/json"}),`${card.data.name||"character"}.json`);
+    if(saved) toast("Character-Card-JSON gespeichert.");
+  } catch(error) { toast(error instanceof Error ? error.message : String(error), true); }
+};
+$("#pngBtn").onclick=async()=>{
+  if(!imageBuffer){toast("Bitte zuerst ein Portrait wählen.",true);return;}
+  try {
+    const output=prepareCardForExport(card);
+    const saved=await download(embedCard(imageBuffer,output),`${card.data.name||"character"}.png`);
+    if(saved) toast("Character-Card-PNG gespeichert.");
+  } catch(error) { toast(error instanceof Error ? error.message : String(error), true); }
+};
 $("#refreshModels").onclick=async()=>{const url=($(`#ollamaUrl`) as HTMLInputElement).value;localStorage.setItem("ollamaUrl",url);const sel=$(`#model`) as HTMLSelectElement;sel.innerHTML=`<option>Lädt …</option>`;try{const list=await models(url);sel.innerHTML=list.map(m=>`<option>${escapeHtml(m)}</option>`).join("")||`<option value="">Keine Modelle gefunden</option>`;const last=localStorage.getItem("model");if(last&&list.includes(last))sel.value=last;toast(`${list.length} Ollama-Modelle gefunden.`);}catch(e){sel.innerHTML=`<option value="">Ollama nicht erreichbar</option>`;toast(e instanceof Error?e.message:String(e),true);}};
 $("#model").onchange=e=>localStorage.setItem("model",(e.target as HTMLSelectElement).value); $("#allFields").onclick=()=>{selected=new Set<EditableField>([...textFields.slice(0,6).map(x=>x.key),...card.data.alternate_greetings.map((_,index)=>greetingField(index))]);renderChecks();};
 $("#editAi").onclick=()=>ai("edit"); document.querySelectorAll<HTMLButtonElement>("[data-ai]").forEach(b=>b.onclick=()=>ai(b.dataset.ai as any));
@@ -323,8 +457,9 @@ async function expandWizardStep() {
   wizardDrafts[step.field] = notes;
   const temp = structuredClone(card);
   if (notes) temp.data[step.field] = notes;
+  const instruction = step.instruction + (notes ? " Verwende diese Nutzernotizen als verbindliche Grundlage: " + notes : "");
   ($("#wizardAi") as HTMLButtonElement).disabled = true;
-  $("#wizardAi").textContent = "Ollama arbeitet …";
+  const timer = startThinking($("#wizardThinking"), "Ollama arbeitet an " + step.title + " …", true);
   try {
     const result = await runAi({
       baseUrl: ($("#ollamaUrl") as HTMLInputElement).value,
@@ -332,21 +467,28 @@ async function expandWizardStep() {
       action: "edit",
       card: temp,
       selected: [step.field],
-      instruction: step.instruction + (notes ? " Verwende diese Nutzernotizen als verbindliche Grundlage: " + notes : ""),
+      instruction,
       language: ($("#language") as HTMLSelectElement).value,
       nsfw: ($("#nsfw") as HTMLInputElement).checked
     });
     const value = result.fields?.[step.field];
     if (!value) throw new Error("Ollama hat für dieses Feld keinen Text zurückgegeben.");
-    card.data[step.field] = value;
+    timer.stop();
+    const reviewed = await reviewFieldChanges({ [step.field]: value }, instruction);
+    const approved = reviewed?.[step.field];
+    if (typeof approved !== "string") {
+      toast("Änderung verworfen; das Feld blieb unverändert.");
+      return;
+    }
+    card.data[step.field] = approved;
     renderAll();
     renderWizard();
     changed();
-    toast(step.title + " wurde ausgearbeitet.");
+    toast(step.title + " wurde übernommen.");
   } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
   finally {
+    timer.stop();
     ($("#wizardAi") as HTMLButtonElement).disabled = false;
-    $("#wizardAi").textContent = "✦ Mit Ollama ausarbeiten";
   }
 }
 
@@ -380,3 +522,8 @@ $("#wizardNext").onclick = () => {
 $("#wizardUse").onclick = useWizardNotes;
 $("#wizardAi").onclick = () => void expandWizardStep();
 $("#wizardFinish").onclick = () => selectTab("fields");
+$("#repoLink").onclick = async () => {
+  try { await window.__TAURI__?.core.invoke("open_repository"); }
+  catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
+};
+void loadBuildInfo();
