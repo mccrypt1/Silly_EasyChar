@@ -2,6 +2,30 @@
 
 All notable changes to Silly EasyChar are documented here. Each release lists English notes first, followed by the German translation.
 
+## v0.3.0
+
+### English
+
+- Added persistent helper cards below every structured Wizard input so examples remain visible while typing.
+- Changed “Use notes” to collect structured Wizard details into the large notes field before applying them.
+- Added a bordered settings button between the brand and watermark, with prepared UI language selection, a persistent NSFW switch, and integrated help.
+- Added privacy-preserving technical error logs containing only timestamps, app versions, operation names, and sanitized error categories.
+- Hardened imported-card and Ollama response normalization against missing, null, or incorrectly shaped fields.
+- Added token optimization for individual fields and multiple selected fields, always using the existing review dialog before applying changes.
+- Added field-specific compaction rules for descriptions, personalities, scenarios, example messages, system prompts, post-history instructions, greetings, and first messages.
+- Reduced Ollama context for field-level editing, translation, and optimization by sending the full target field plus a bounded consistency context instead of the entire card.
+
+### Deutsch
+
+- Unter jeder strukturierten Wizard-Eingabe bleibt nun eine Hinweiskarte sichtbar, sodass Beispiele beim Tippen nicht verschwinden.
+- „Notizen übernehmen“ sammelt strukturierte Wizard-Angaben jetzt zuerst im großen Notizenfeld und übernimmt sie anschließend.
+- Zwischen Marke und Wasserzeichen befindet sich ein umrandeter Einstellungsbutton mit vorbereiteter Oberflächensprache, gespeichertem NSFW-Schalter und integrierter Hilfe.
+- Datenschutzfreundliche technische Fehlerlogs enthalten ausschließlich Zeitpunkt, Programmversion, Vorgangsname und bereinigte Fehlerkategorie.
+- Importierte Karten und Ollama-Antworten werden robuster gegen fehlende, leere oder falsch geformte Felder normalisiert.
+- Token-Optimierung ist für einzelne Felder und mehrere ausgewählte Felder verfügbar; vor der Übernahme erscheint immer das bestehende Prüffenster.
+- Feldspezifische Kürzungsregeln gelten für Beschreibung, Persönlichkeit, Szenario, Dialogbeispiele, System Prompt, Post-History Instructions, Begrüßungen und erste Nachrichten.
+- Für feldweise Bearbeitung, Übersetzung und Optimierung erhält Ollama das vollständige Zielfeld plus begrenzten Konsistenzkontext statt der gesamten Karte.
+
 ## v0.2.9
 
 ### English

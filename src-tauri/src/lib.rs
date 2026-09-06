@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
     time::UNIX_EPOCH,
 };
@@ -41,6 +42,85 @@ struct ChatResponse {
 #[derive(Deserialize)]
 struct ChatMessage {
     content: String,
+}
+
+fn approved_operation(value: &str) -> &'static str {
+    match value {
+        "ai_edit" => "ai_edit",
+        "ai_translate" => "ai_translate",
+        "ai_suggest" => "ai_suggest",
+        "ai_grade" => "ai_grade",
+        "ai_lorebook" => "ai_lorebook",
+        "ai_optimize" => "ai_optimize",
+        "wizard_name" => "wizard_name",
+        "wizard_description" => "wizard_description",
+        "wizard_personality" => "wizard_personality",
+        "wizard_scenario" => "wizard_scenario",
+        "wizard_first_mes" => "wizard_first_mes",
+        "wizard_mes_example" => "wizard_mes_example",
+        "wizard_system_prompt" => "wizard_system_prompt",
+        "window_error" => "window_error",
+        "unhandled_promise" => "unhandled_promise",
+        _ => "UNKNOWN_OPERATION",
+    }
+}
+
+fn approved_error_kind(value: &str) -> &'static str {
+    match value {
+        "MODEL_JSON_INVALID" => "MODEL_JSON_INVALID",
+        "OLLAMA_NETWORK" => "OLLAMA_NETWORK",
+        "OLLAMA_TIMEOUT" => "OLLAMA_TIMEOUT",
+        "CLIENT_RESPONSE_SHAPE" => "CLIENT_RESPONSE_SHAPE",
+        "OLLAMA_HTTP" => "OLLAMA_HTTP",
+        "TYPEERROR" => "TYPEERROR",
+        "RANGEERROR" => "RANGEERROR",
+        "ERROR" => "ERROR",
+        "UNKNOWN" => "UNKNOWN",
+        _ => "UNKNOWN_ERROR",
+    }
+}
+
+fn error_log_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("logs")
+        .join("technical-errors.log"))
+}
+
+#[tauri::command]
+fn error_log_location(app: tauri::AppHandle) -> Result<String, String> {
+    Ok(error_log_path(&app)?.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn write_error_log(
+    app: tauri::AppHandle,
+    operation: String,
+    error_kind: String,
+) -> Result<(), String> {
+    let path = error_log_path(&app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_secs();
+    let operation = approved_operation(&operation);
+    let error_kind = approved_error_kind(&error_kind);
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    writeln!(
+        file,
+        "{timestamp}\t{}\t{operation}\t{error_kind}",
+        env!("CARGO_PKG_VERSION")
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[derive(Serialize)]
@@ -162,6 +242,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             build_info,
             open_repository,
+            error_log_location,
+            write_error_log,
             export_character_file,
             ollama_models,
             ollama_chat,
@@ -583,5 +665,19 @@ mod tests {
             vec!["Visible"]
         );
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn technical_log_values_are_restricted_to_fixed_allowlists() {
+        assert_eq!(approved_operation("ai_edit"), "ai_edit");
+        assert_eq!(
+            approved_error_kind("MODEL_JSON_INVALID"),
+            "MODEL_JSON_INVALID"
+        );
+        assert_eq!(
+            approved_operation("private notes: hello"),
+            "UNKNOWN_OPERATION"
+        );
+        assert_eq!(approved_error_kind("private notes: hello"), "UNKNOWN_ERROR");
     }
 }

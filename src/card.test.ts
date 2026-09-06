@@ -24,6 +24,14 @@ describe("SillyTavern placeholders", () => {
     expect([card.data.scenario, card.data.alternate_greetings[0], card.data.character_book.entries[0].content])
       .toEqual(["{{user}} trifft {{char}}.", "Hallo {{user}}", "{{char}} kennt {{user}}."]);
   });
+
+  it("normalizes nullable text fields to safe strings", () => {
+    const card = normalizeCard({ data: {
+      personality: null, creator_notes: null, system_prompt: null, post_history_instructions: null
+    } });
+    expect([card.data.personality, card.data.creator_notes, card.data.system_prompt, card.data.post_history_instructions])
+      .toEqual(["", "", "", ""]);
+  });
 });
 
   it("removes German articles and expands contractions before placeholders", () => {

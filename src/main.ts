@@ -27,6 +27,7 @@ let imageBuffer: ArrayBuffer | null = null;
 let imageUrl = "";
 let activeField: CoreEditableField = "description";
 let selected = new Set<EditableField>(["description", "personality", "scenario", "first_mes"]);
+let nsfwEnabled = localStorage.getItem("nsfwEnabled") !== "false";
 let score: ScoreResult = localScore(card);
 let aiBusy = false;
 let statusTimer = 0;
@@ -44,7 +45,7 @@ let cropOffsetY = 0;
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <header class="topbar">
-    <div class="brand"><div class="brand-mark">S</div><div class="brand-copy"><strong>Silly EasyChar</strong><small>Offline Character Studio</small><span id="buildInfo" class="build-info">v… · …</span></div><button id="repoLink" class="brand-watermark" title="Silly EasyChar auf GitHub öffnen">mccrypt1</button></div>
+    <div class="brand"><div class="brand-mark">S</div><div class="brand-copy"><strong>Silly EasyChar</strong><small>Offline Character Studio</small><span id="buildInfo" class="build-info">v… · …</span></div><button id="settingsBtn" class="settings-button" title="Einstellungen öffnen" aria-label="Einstellungen">⚙</button><button id="repoLink" class="brand-watermark" title="Silly EasyChar auf GitHub öffnen">mccrypt1</button></div>
     <div class="top-actions">
       <button id="newBtn" class="ghost">＋ Neu</button><button id="importBtn" class="ghost">↥ Import</button>
       <button id="saveLinkedBtn" class="primary hidden">In SillyTavern speichern</button><button id="addFolderBtn" class="ghost hidden">Zum ST-Ordner</button>
@@ -97,7 +98,7 @@ app.innerHTML = `
     </section>
     <aside class="ai-panel">
       <div class="ai-head"><div class="ai-avatar">✦</div><div><strong>Lokaler Schreibassistent</strong><small>Ollama · Daten bleiben auf deinem PC</small></div></div>
-      <div class="quick-actions"><button data-ai="suggest">Ideen</button><button data-ai="grade">Bewerten</button><button data-ai="translate">Übersetzen</button><button data-ai="lorebook">Lorebook</button></div>
+      <div class="quick-actions"><button data-ai="suggest">Ideen</button><button data-ai="grade">Bewerten</button><button data-ai="translate">Übersetzen</button><button data-ai="lorebook">Lorebook</button><button data-ai="optimize" class="token-action">Token minimieren</button></div>
       <div class="selection"><div class="field-head"><b>Felder für Bearbeitung</b><button id="allFields" class="link">alle</button></div><div id="fieldChecks"></div></div>
       <label class="instruction-label">Was soll geändert werden?</label>
       <textarea id="instruction" rows="8" placeholder="z. B. Informationen auf passende Felder verteilen, auf Deutsch übersetzen und die Stimme natürlicher machen …"></textarea>
@@ -105,6 +106,11 @@ app.innerHTML = `
       <div id="aiOutput" class="ai-output"><div class="empty-state"><span>✦</span><p>Wähle Felder und beschreibe deine Änderung – oder nutze eine Schnellaktion.</p></div></div>
     </aside>
   </main>
+  <div id="settingsModal" class="modal hidden"><div class="modal-card settings-modal"><div class="field-head"><h3>Einstellungen</h3><button id="closeSettings">×</button></div>
+    <label>Oberflächensprache<select id="uiLanguage"><option value="de">Deutsch</option><option value="en" disabled>English · folgt zum öffentlichen Release</option></select></label>
+    <label class="settings-toggle"><span><b>NSFW-Verarbeitung</b><small>Erwachsene fiktionale Inhalte bei lokalen Ollama-Aktionen erhalten.</small></span><input id="nsfwSetting" type="checkbox" /><i></i></label>
+    <details><summary>Hilfe</summary><div class="settings-help"><p><b>Token minimieren</b> kürzt einzelne oder alle ausgewählten Felder. Jede Änderung erscheint vor der Übernahme im Prüffenster.</p><p><b>Fehlerprotokoll</b> enthält nur Zeitpunkt, Programmversion, Vorgang und technischen Fehlercode – niemals Kartenfelder, Prompts oder Notizen.</p><p>Protokoll: <code id="errorLogPath">Wird ermittelt …</code></p></div></details>
+  </div></div>
   <div id="versionModal" class="modal hidden"><div class="modal-card"><div class="field-head"><h3>Letzte Kartenversionen</h3><button id="closeVersions">×</button></div><p>Vor jedem Speichern wird automatisch eine Version angelegt. Maximal drei werden behalten.</p><div id="versionList"></div></div></div>
   <div id="reviewModal" class="modal review-modal hidden"><div class="review-card"><div class="field-head"><h3>Änderungen prüfen</h3><button id="closeReview">×</button></div><div class="review-request"><span>DEINE ANWEISUNG</span><p id="reviewRequest"></p></div><div class="review-actions"><button id="acceptAllReview" class="primary">✓ Alle übernehmen</button><button id="rejectReview" class="ghost">✕ Alle ablehnen</button></div><div id="reviewFields"></div><div class="review-footer"><button id="applyReview" class="primary">Ausgewählte Änderungen übernehmen</button></div></div></div>
   <div id="cropModal" class="modal crop-modal hidden"><div class="crop-card"><div class="field-head"><h3>Portrait zuschneiden</h3><button id="closeCrop">×</button></div><p>Bild verschieben und mit dem Regler zoomen. Der Export wird als 4:5-PNG mit 768 × 960 Pixeln gespeichert.</p><canvas id="cropCanvas" width="768" height="960"></canvas><label>Zoom<input id="cropZoom" type="range" min="1" max="3" step="0.01" value="1" /></label><div class="crop-actions"><button id="cropOriginal" class="ghost">Original verwenden</button><button id="applyCrop" class="primary">Zuschnitt übernehmen</button></div></div></div>
@@ -118,12 +124,17 @@ function saveDraft() { localStorage.setItem("draft", JSON.stringify(card)); $("#
 function changed() { $("#saveState").textContent = "Speichert …"; score = localScore(card); renderScore(); window.clearTimeout(statusTimer); statusTimer = window.setTimeout(saveDraft, 350); }
 
 function renderFields() {
-  $("#fields").innerHTML = textFields.map(f => `<article class="field ${activeField === f.key ? "focused" : ""}" data-key="${f.key}"><div class="field-head"><label>${f.label}</label><span>${card.data[f.key].length} Zeichen</span></div>${f.rows === 1 ? `<input data-field="${f.key}" value="${escapeAttr(card.data[f.key])}" placeholder="${escapeAttr(f.hint)}" />` : `<textarea data-field="${f.key}" rows="${f.rows}" placeholder="${escapeAttr(f.hint)}">${escapeHtml(card.data[f.key])}</textarea>`}</article>`).join("");
+  $("#fields").innerHTML = textFields.map(f => {
+    const value = typeof card.data[f.key] === "string" ? card.data[f.key] : "";
+    const optimize = f.key === "creator_notes" ? "" : `<button class="field-optimize" data-optimize-one="${f.key}" title="Nur dieses Feld kompakter machen">Token sparen</button>`;
+    return `<article class="field ${activeField === f.key ? "focused" : ""}" data-key="${f.key}"><div class="field-head"><label>${f.label}</label><div>${optimize}<span>${value.length} Zeichen</span></div></div>${f.rows === 1 ? `<input data-field="${f.key}" value="${escapeAttr(value)}" placeholder="${escapeAttr(f.hint)}" />` : `<textarea data-field="${f.key}" rows="${f.rows}" placeholder="${escapeAttr(f.hint)}">${escapeHtml(value)}</textarea>`}</article>`;
+  }).join("");
   document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("[data-field]").forEach(el => {
     el.addEventListener("focus", () => { activeField = el.dataset.field as CoreEditableField; document.querySelectorAll(".field").forEach(n => n.classList.toggle("focused", (n as HTMLElement).dataset.key === activeField)); });
     el.addEventListener("input", () => { card.data[el.dataset.field as CoreEditableField] = el.value; el.closest(".field")!.querySelector("span")!.textContent = `${el.value.length} Zeichen`; changed(); });
     el.addEventListener("change", () => { const value = normalizePlaceholders(el.value); if (value !== el.value) { el.value = value; card.data[el.dataset.field as CoreEditableField] = value; changed(); } });
   });
+  document.querySelectorAll<HTMLButtonElement>("[data-optimize-one]").forEach(button => button.onclick = () => void ai("optimize", [button.dataset.optimizeOne as CoreEditableField]));
 }
 function greetingField(index: number): EditableField { return `alternate_greeting:${index}`; }
 function renderChecks() {
@@ -255,7 +266,7 @@ async function openCrop(buffer: ArrayBuffer) {
 
 function fieldValue(key: EditableField): string {
   if (key.startsWith("alternate_greeting:")) return card.data.alternate_greetings[Number(key.split(":")[1])] ?? "";
-  return card.data[key as CoreEditableField];
+  const value = card.data[key as CoreEditableField]; return typeof value === "string" ? value : "";
 }
 function fieldTitle(key: EditableField): string {
   if (key.startsWith("alternate_greeting:")) return "Alternative Begrüßung " + (Number(key.split(":")[1]) + 1);
@@ -345,7 +356,23 @@ async function loadBuildInfo() {
   try {
     const info = await window.__TAURI__?.core.invoke<{ version: string; commit: string }>("build_info");
     if (info) $("#buildInfo").textContent = `v${info.version} · ${info.commit}`;
-  } catch { $("#buildInfo").textContent = "v0.2.9 · development"; }
+  } catch { $("#buildInfo").textContent = "v0.3.0 · development"; }
+}
+function technicalErrorKind(error: unknown): string {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  if (message.includes("json")) return "MODEL_JSON_INVALID";
+  if (message.includes("failed to fetch") || message.includes("nicht erreichbar") || message.includes("request")) return "OLLAMA_NETWORK";
+  if (message.includes("timeout") || message.includes("timed out")) return "OLLAMA_TIMEOUT";
+  if (message.includes("undefined") || message.includes("null")) return "CLIENT_RESPONSE_SHAPE";
+  if (message.includes("http")) return "OLLAMA_HTTP";
+  return error instanceof Error && error.name ? error.name.toUpperCase().replace(/[^A-Z0-9_]/g, "_").slice(0, 48) : "UNKNOWN";
+}
+function recordTechnicalError(operation: string, error: unknown) {
+  if (!window.__TAURI__) return;
+  void window.__TAURI__.core.invoke("write_error_log", {
+    operation,
+    errorKind: technicalErrorKind(error)
+  }).catch(() => undefined);
 }
 async function importFile(file: File) {
   if (file.name.toLowerCase().endsWith(".json")) { card=normalizeCard(JSON.parse(await file.text())); clearPortrait(); }
@@ -353,7 +380,7 @@ async function importFile(file: File) {
   resetAiInstruction();
   score=localScore(card); renderAll(); saveDraft(); toast(`${card.data.name} importiert.`);
 }
-async function ai(action: "edit"|"translate"|"suggest"|"grade"|"lorebook") {
+async function ai(action: "edit"|"translate"|"suggest"|"grade"|"lorebook"|"optimize", fieldOverride?: EditableField[]) {
   if(aiBusy)return;
   aiBusy=true;
   document.body.classList.add("busy");
@@ -362,11 +389,11 @@ async function ai(action: "edit"|"translate"|"suggest"|"grade"|"lorebook") {
   const model = ($("#model") as HTMLSelectElement).value;
   const instruction = ($("#instruction") as HTMLTextAreaElement).value;
   const language = ($("#language") as HTMLSelectElement).value;
-  const nsfw = true;
-  const selectedFields = [...selected];
+  const nsfw = nsfwEnabled;
+  const selectedFields = fieldOverride ?? [...selected];
   try {
     let result: AiResult;
-    if (action === "edit" || action === "translate") {
+    if (action === "edit" || action === "translate" || action === "optimize") {
       if (!selectedFields.length) throw new Error("Bitte mindestens ein Feld auswählen.");
       const combinedFields: NonNullable<AiResult["fields"]> = {};
       const explanations: string[] = [];
@@ -382,8 +409,8 @@ async function ai(action: "edit"|"translate"|"suggest"|"grade"|"lorebook") {
       result = await runAi({ baseUrl, model, action, card, selected: selectedFields, instruction, language, nsfw });
     }
     timer.stop();
-    if ((action === "edit" || action === "translate") && result.fields) {
-      const reviewRequest = action === "translate" ? `Übersetzen nach ${language}` : instruction;
+    if ((action === "edit" || action === "translate" || action === "optimize") && result.fields) {
+      const reviewRequest = action === "translate" ? `Übersetzen nach ${language}` : action === "optimize" ? "Tokenverbrauch reduzieren, ohne wichtige Informationen zu verlieren" : instruction;
       const reviewed = await reviewFieldChanges(result.fields, reviewRequest);
       if (!reviewed) {
         $("#aiOutput").innerHTML = `<div class="result"><b>Änderungen verworfen</b><p>Die Karte wurde nicht verändert.</p></div>`;
@@ -391,8 +418,9 @@ async function ai(action: "edit"|"translate"|"suggest"|"grade"|"lorebook") {
       }
       result.fields = reviewed;
     }
-    applyAiResult(result, action);
+    applyAiResult(result, action, new Set(selectedFields));
   } catch(e){
+    recordTechnicalError("ai_" + action, e);
     timer.stop();
     $("#aiOutput").innerHTML=`<div class="error"><b>Ollama-Fehler</b><p>${escapeHtml(e instanceof Error?e.message:String(e))}</p><small>Läuft Ollama und ist ein Modell installiert?</small></div>`;
     toast("KI-Aktion fehlgeschlagen.",true);
@@ -402,10 +430,10 @@ async function ai(action: "edit"|"translate"|"suggest"|"grade"|"lorebook") {
     document.body.classList.remove("busy");
   }
 }
-function applyAiResult(r: AiResult, action: string) {
+function applyAiResult(r: AiResult, action: string, allowedFields = selected) {
   if(r.fields){
     for(const [key,value] of Object.entries(r.fields)){
-      if(typeof value!=="string" || !selected.has(key as EditableField)) continue;
+      if(typeof value!=="string" || !allowedFields.has(key as EditableField)) continue;
       if(key.startsWith("alternate_greeting:")){
         const index=Number(key.split(":")[1]);
         if(Number.isInteger(index) && index>=0 && index<card.data.alternate_greetings.length) card.data.alternate_greetings[index]=value;
@@ -416,7 +444,7 @@ function applyAiResult(r: AiResult, action: string) {
     renderFields(); renderExtras(); renderChecks(); changed();
   }
   if(r.score){ score=r.score; renderScore(r.score); }
-  if(action==="grade" && r.score?.findings.length){
+  if(action==="grade" && Array.isArray(r.score?.findings) && r.score.findings.length){
     const instruction = $("#instruction") as HTMLTextAreaElement;
     instruction.value = r.score.findings.map((finding, index) => `${index + 1}. ${finding}`).join("\n");
     instruction.focus();
@@ -576,7 +604,7 @@ function renderWizard() {
   const prompts = wizardPrompts[step.field];
   const values = wizardDetails[step.field] ?? prompts.map(() => "");
   wizardDetails[step.field] = values;
-  $("#wizardDetails").innerHTML = prompts.map(([label,placeholder], index) => `<label>${escapeHtml(label)}<textarea rows="3" data-wizard-detail="${index}" placeholder="${escapeAttr(placeholder)}">${escapeHtml(values[index] ?? "")}</textarea></label>`).join("");
+  $("#wizardDetails").innerHTML = prompts.map(([label,placeholder], index) => `<label>${escapeHtml(label)}<textarea rows="3" data-wizard-detail="${index}" placeholder="${escapeAttr(placeholder)}">${escapeHtml(values[index] ?? "")}</textarea><small class="wizard-prompt-hint">${escapeHtml(placeholder)}</small></label>`).join("");
   document.querySelectorAll<HTMLTextAreaElement>("[data-wizard-detail]").forEach(el => el.oninput = () => { values[Number(el.dataset.wizardDetail)] = el.value; });
   ($("#wizardNotes") as HTMLTextAreaElement).value = wizardDrafts[step.field] ?? "";
   $("#wizardCurrent").textContent = card.data[step.field] || "Noch leer";
@@ -607,6 +635,7 @@ async function expandWizardStep() {
   const step = wizardSteps[wizardStep];
   const notes = wizardNotesForStep();
   wizardDrafts[step.field] = notes;
+  wizardDetails[step.field] = wizardPrompts[step.field].map(() => "");
   const temp = structuredClone(card);
   if (notes) temp.data[step.field] = notes;
   const instruction = step.instruction + (notes ? " Verwende diese Nutzernotizen als verbindliche Grundlage: " + notes : "");
@@ -637,7 +666,7 @@ async function expandWizardStep() {
     renderWizard();
     changed();
     toast(step.title + " wurde übernommen.");
-  } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
+  } catch (error) { recordTechnicalError("wizard_" + step.field, error); toast(error instanceof Error ? error.message : String(error), true); }
   finally {
     timer.stop();
     ($("#wizardAi") as HTMLButtonElement).disabled = false;
@@ -678,4 +707,20 @@ $("#repoLink").onclick = async () => {
   try { await window.__TAURI__?.core.invoke("open_repository"); }
   catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
 };
+$("#uiLanguage").onchange = event => localStorage.setItem("uiLanguage", (event.target as HTMLSelectElement).value);
 void loadBuildInfo();
+window.addEventListener("error", event => recordTechnicalError("window_error", event.error));
+window.addEventListener("unhandledrejection", event => recordTechnicalError("unhandled_promise", event.reason));
+$("#settingsBtn").onclick = async () => {
+  ($("#nsfwSetting") as HTMLInputElement).checked = nsfwEnabled;
+  ($("#uiLanguage") as HTMLSelectElement).value = localStorage.getItem("uiLanguage") || "de";
+  $("#settingsModal").classList.remove("hidden");
+  try { $("#errorLogPath").textContent = await window.__TAURI__?.core.invoke<string>("error_log_location") ?? "Nur in der Desktop-App verfügbar"; }
+  catch { $("#errorLogPath").textContent = "Pfad konnte nicht ermittelt werden"; }
+};
+$("#closeSettings").onclick = () => $("#settingsModal").classList.add("hidden");
+$("#settingsModal").addEventListener("click", event => { if (event.target === $("#settingsModal")) $("#settingsModal").classList.add("hidden"); });
+$("#nsfwSetting").onchange = event => {
+  nsfwEnabled = (event.target as HTMLInputElement).checked;
+  localStorage.setItem("nsfwEnabled", String(nsfwEnabled));
+};

@@ -55,5 +55,31 @@ describe("Ollama result handling", () => {
     expect(request.prompt).toContain("Probability should normally be 100");
     expect(request.prompt).toContain("Depth matters only at position 4");
   });
+
+  it("normalizes an incomplete grading response instead of reading an undefined findings length", async () => {
+    const invoke = vi.fn().mockResolvedValue('{"score":{"total":70,"structure":14,"coherence":14,"roleplay":14,"creativity":14,"polish":14}}');
+    vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });
+    const result = await runAi({
+      baseUrl: "http://127.0.0.1:8787", model: "test", action: "grade",
+      card: emptyCard(), selected: [], instruction: "", language: "Deutsch", nsfw: true
+    });
+    expect(result.score?.findings).toEqual([]);
+  });
+
+  it("uses a focused payload and field-specific rules for token optimization", async () => {
+    const invoke = vi.fn().mockResolvedValue('{"fields":{"scenario":"A compact scenario."}}');
+    vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });
+    const card = emptyCard();
+    card.data.scenario = "Original scenario";
+    card.data.post_history_instructions = "PRIVATE_LARGE_UNUSED_FIELD";
+    await runAi({
+      baseUrl: "http://127.0.0.1:8787", model: "test", action: "optimize",
+      card, selected: ["scenario"], instruction: "", language: "Deutsch", nsfw: true
+    });
+    const request = invoke.mock.calls[0][1] as { prompt: string };
+    expect(request.prompt).toContain("Scenario should be 1–2 sentences");
+    expect(request.prompt).toContain("Original scenario");
+    expect(request.prompt).not.toContain("PRIVATE_LARGE_UNUSED_FIELD");
+  });
 });
 
