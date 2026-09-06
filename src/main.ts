@@ -44,7 +44,7 @@ let cropOffsetY = 0;
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <header class="topbar">
-    <div class="brand"><div class="brand-mark">S</div><div><strong>Silly EasyChar</strong><small>Offline Character Studio</small></div><button id="repoLink" class="brand-watermark" title="Silly EasyChar auf GitHub öffnen">mccrypt1</button><span id="buildInfo" class="build-info">v… · …</span></div>
+    <div class="brand"><div class="brand-mark">S</div><div class="brand-copy"><strong>Silly EasyChar</strong><small>Offline Character Studio</small><span id="buildInfo" class="build-info">v… · …</span></div><button id="repoLink" class="brand-watermark" title="Silly EasyChar auf GitHub öffnen">mccrypt1</button></div>
     <div class="top-actions">
       <button id="newBtn" class="ghost">＋ Neu</button><button id="importBtn" class="ghost">↥ Import</button>
       <button id="saveLinkedBtn" class="primary hidden">In SillyTavern speichern</button><button id="addFolderBtn" class="ghost hidden">Zum ST-Ordner</button>
@@ -343,7 +343,7 @@ async function loadBuildInfo() {
   try {
     const info = await window.__TAURI__?.core.invoke<{ version: string; commit: string }>("build_info");
     if (info) $("#buildInfo").textContent = `v${info.version} · ${info.commit}`;
-  } catch { $("#buildInfo").textContent = "v0.2.7 · development"; }
+  } catch { $("#buildInfo").textContent = "v0.2.8 · development"; }
 }
 async function importFile(file: File) {
   if (file.name.toLowerCase().endsWith(".json")) { card=normalizeCard(JSON.parse(await file.text())); clearPortrait(); }

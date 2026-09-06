@@ -2,6 +2,18 @@
 
 All notable changes to Silly EasyChar are documented here. Each release lists English notes first, followed by the German translation.
 
+## v0.2.8
+
+### English
+
+- Moved the red version and commit line below the Offline Character Studio subtitle.
+- Shifted the complete brand block, including its logo, two pixels upward to preserve comfortable spacing in the header.
+
+### Deutsch
+
+- Die rote Versions- und Commit-Zeile unter den Untertitel Offline Character Studio verschoben.
+- Den gesamten Markenblock einschließlich Logo um zwei Pixel nach oben versetzt, damit im Kopfbereich angenehme Abstände erhalten bleiben.
+
 ## v0.2.7
 
 ### English

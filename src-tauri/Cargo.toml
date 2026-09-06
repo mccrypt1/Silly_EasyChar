@@ -1,6 +1,6 @@
 [package]
 name = "silly-easychar"
-version = "0.2.7"
+version = "0.2.8"
 description = "Offline SillyTavern character card studio"
 authors = ["Silly EasyChar contributors"]
 edition = "2021"
