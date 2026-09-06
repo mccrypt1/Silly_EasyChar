@@ -1,6 +1,6 @@
 import "./style.css";
 import { emptyCard, localScore, normalizeCard, normalizeLoreEntry, normalizePlaceholders, prepareCardForExport, toV3Card } from "./card";
-import defaultPortraitUrl from "./assets/default-portrait.jpg";
+import defaultPortraitUrl from "./assets/default-portrait.jpg?inline";
 import { embedCard, extractCard, imageAsPng } from "./png";
 import { loadDraftPortrait, saveDraftPortrait } from "./draft-image";
 import { formatElapsed, hallucinationDelay, LOADING_HALLUCINATIONS } from "./loading";
@@ -185,12 +185,18 @@ function resetAiInstruction() {
   $("#aiOutput").innerHTML = `<div class="empty-state"><span>✦</span><p>Wähle Felder und beschreibe deine Änderung – oder nutze eine Schnellaktion.</p></div>`;
 }
 async function defaultPortraitBuffer(): Promise<ArrayBuffer> {
-  defaultImagePromise ??= fetch(defaultPortraitUrl)
-    .then(response => {
-      if (!response.ok) throw new Error("Das eingebaute Standardportrait konnte nicht geladen werden.");
-      return response.blob();
-    })
-    .then(blob => imageAsPng(new File([blob], "default-portrait.jpg", { type: blob.type || "image/jpeg" })));
+  defaultImagePromise ??= Promise.resolve().then(() => {
+    const separator = defaultPortraitUrl.indexOf(",");
+    const header = defaultPortraitUrl.slice(0, separator);
+    if (separator < 0 || !header.includes(";base64")) {
+      throw new Error("Das eingebaute Standardportrait ist ungültig.");
+    }
+    const binary = atob(defaultPortraitUrl.slice(separator + 1));
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+    const mime = /^data:([^;,]+)/.exec(header)?.[1] || "image/jpeg";
+    return imageAsPng(new File([bytes.buffer], "default-portrait.jpg", { type: mime }));
+  });
   return defaultImagePromise;
 }
 function commitPortrait(buffer: ArrayBuffer, persist = true) {
@@ -337,7 +343,7 @@ async function loadBuildInfo() {
   try {
     const info = await window.__TAURI__?.core.invoke<{ version: string; commit: string }>("build_info");
     if (info) $("#buildInfo").textContent = `v${info.version} · ${info.commit}`;
-  } catch { $("#buildInfo").textContent = "v0.2.6 · development"; }
+  } catch { $("#buildInfo").textContent = "v0.2.7 · development"; }
 }
 async function importFile(file: File) {
   if (file.name.toLowerCase().endsWith(".json")) { card=normalizeCard(JSON.parse(await file.text())); clearPortrait(); }

@@ -2,6 +2,18 @@
 
 All notable changes to Silly EasyChar are documented here. Each release lists English notes first, followed by the German translation.
 
+## v0.2.7
+
+### English
+
+- Embedded the default portrait directly in the application and decoded it without a WebView fetch, fixing failed PNG exports when no custom portrait is selected.
+- Increased the mccrypt1 watermark and version/commit text by one pixel while keeping both visibly smaller than the application title.
+
+### Deutsch
+
+- Das Standardportrait ist nun direkt in die Anwendung eingebettet und wird ohne WebView-Fetch dekodiert; dadurch funktionieren PNG-Exporte wieder, wenn kein eigenes Portrait ausgewählt wurde.
+- Das mccrypt1-Wasserzeichen und der Version-/Commit-Text wurden um jeweils einen Pixel vergrößert, bleiben aber sichtbar kleiner als der Anwendungstitel.
+
 ## v0.2.6
 
 ### English
