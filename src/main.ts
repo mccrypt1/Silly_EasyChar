@@ -2,6 +2,8 @@ import "./style.css";
 import { emptyCard, localScore, normalizeCard, normalizeLoreEntry, normalizePlaceholders, prepareCardForExport, toV3Card } from "./card";
 import defaultPortraitUrl from "./assets/default-portrait.jpg";
 import { embedCard, extractCard, imageAsPng } from "./png";
+import { loadDraftPortrait, saveDraftPortrait } from "./draft-image";
+import { formatElapsed, hallucinationDelay, LOADING_HALLUCINATIONS } from "./loading";
 import { models, runAi } from "./ai";
 import { CardLibrary } from "./library";
 import type { LibraryEntry } from "./library";
@@ -64,7 +66,6 @@ app.innerHTML = `
         <label>Adresse<input id="ollamaUrl" value="${escapeAttr(localStorage.getItem("ollamaUrl") || "http://127.0.0.1:11434")}" /></label>
         <label>Modell<div class="inline"><select id="model"><option value="">Modelle laden …</option></select><button id="refreshModels" title="Modelle neu laden">↻</button></div></label>
         <label>Ausgabesprache<select id="language"><option>Deutsch</option><option>English</option><option>Spanish</option><option>French</option><option>Italian</option></select></label>
-        <label class="toggle-row"><span><b>NSFW-Modus</b><small>Explizite Inhalte erwachsener Figuren erhalten</small></span><input id="nsfw" type="checkbox" /><i></i></label>
       </section>
       <section class="score-card" id="scoreCard"></section>
     </aside>
@@ -192,11 +193,26 @@ async function defaultPortraitBuffer(): Promise<ArrayBuffer> {
     .then(blob => imageAsPng(new File([blob], "default-portrait.jpg", { type: blob.type || "image/jpeg" })));
   return defaultImagePromise;
 }
-function commitPortrait(buffer: ArrayBuffer) {
+function commitPortrait(buffer: ArrayBuffer, persist = true) {
   imageBuffer = buffer;
   if (imageUrl) URL.revokeObjectURL(imageUrl);
   imageUrl = URL.createObjectURL(new Blob([buffer], { type: "image/png" }));
   renderPortrait();
+  if (persist) void saveDraftPortrait(buffer).catch(() => undefined);
+}
+function clearPortrait() {
+  imageBuffer = null;
+  if (imageUrl) URL.revokeObjectURL(imageUrl);
+  imageUrl = "";
+  void saveDraftPortrait(null).catch(() => undefined);
+}
+async function restoreDraftPortrait() {
+  try {
+    const stored = await loadDraftPortrait();
+    if (stored && !imageBuffer) commitPortrait(stored, false);
+  } catch {
+    // IndexedDB may be unavailable in restricted WebViews; the card still uses the default portrait.
+  }
 }
 function closeCrop() {
   $("#cropModal").classList.add("hidden");
@@ -241,11 +257,28 @@ function startThinking(host: HTMLElement, label: string, hideWhenDone = false) {
   const started = Date.now();
   let stopped = false;
   host.classList.remove("hidden");
-  host.innerHTML = `<div class="thinking"><i></i><p><span data-thinking-label></span><strong data-thinking-seconds>0 s</strong></p></div>`;
+  host.innerHTML = `<div class="thinking"><i></i><p><span data-thinking-label></span><strong data-thinking-seconds>0 s</strong><small data-thinking-hallucination></small></p></div>`;
   const labelNode = host.querySelector<HTMLElement>("[data-thinking-label]")!;
   const secondsNode = host.querySelector<HTMLElement>("[data-thinking-seconds]")!;
+  const hallucinationNode = host.querySelector<HTMLElement>("[data-thinking-hallucination]")!;
+  let hallucinationIndex = -1;
+  let nextHallucination = Date.now() + hallucinationDelay();
+  const showHallucination = () => {
+    let next = Math.floor(Math.random() * LOADING_HALLUCINATIONS.length);
+    if (next === hallucinationIndex) next = (next + 1) % LOADING_HALLUCINATIONS.length;
+    hallucinationIndex = next;
+    hallucinationNode.textContent = LOADING_HALLUCINATIONS[next];
+  };
   labelNode.textContent = label;
-  const tick = () => { secondsNode.textContent = Math.floor((Date.now() - started) / 1000) + " s"; };
+  showHallucination();
+  const tick = () => {
+    const now = Date.now();
+    secondsNode.textContent = formatElapsed((now - started) / 1000);
+    if (now >= nextHallucination) {
+      showHallucination();
+      nextHallucination = now + hallucinationDelay();
+    }
+  };
   const interval = window.setInterval(tick, 250);
   return {
     update(value: string) { labelNode.textContent = value; },
@@ -304,11 +337,11 @@ async function loadBuildInfo() {
   try {
     const info = await window.__TAURI__?.core.invoke<{ version: string; commit: string }>("build_info");
     if (info) $("#buildInfo").textContent = `v${info.version} · ${info.commit}`;
-  } catch { $("#buildInfo").textContent = "v0.2.5 · development"; }
+  } catch { $("#buildInfo").textContent = "v0.2.6 · development"; }
 }
 async function importFile(file: File) {
-  if (file.name.toLowerCase().endsWith(".json")) { card=normalizeCard(JSON.parse(await file.text())); imageBuffer=null; if(imageUrl)URL.revokeObjectURL(imageUrl); imageUrl=""; }
-  else { const buffer=await file.arrayBuffer(); const found=extractCard(buffer); if (!found) throw new Error("Dieses PNG enthält keine Character-Card-Metadaten."); card=found; imageBuffer=buffer; if(imageUrl)URL.revokeObjectURL(imageUrl); imageUrl=URL.createObjectURL(file); }
+  if (file.name.toLowerCase().endsWith(".json")) { card=normalizeCard(JSON.parse(await file.text())); clearPortrait(); }
+  else { const buffer=await file.arrayBuffer(); const found=extractCard(buffer); if (!found) throw new Error("Dieses PNG enthält keine Character-Card-Metadaten."); card=found; commitPortrait(buffer); }
   resetAiInstruction();
   score=localScore(card); renderAll(); saveDraft(); toast(`${card.data.name} importiert.`);
 }
@@ -321,7 +354,7 @@ async function ai(action: "edit"|"translate"|"suggest"|"grade"|"lorebook") {
   const model = ($("#model") as HTMLSelectElement).value;
   const instruction = ($("#instruction") as HTMLTextAreaElement).value;
   const language = ($("#language") as HTMLSelectElement).value;
-  const nsfw = ($("#nsfw") as HTMLInputElement).checked;
+  const nsfw = true;
   const selectedFields = [...selected];
   try {
     let result: AiResult;
@@ -386,7 +419,7 @@ function applyAiResult(r: AiResult, action: string) {
   $("#aiOutput").innerHTML=`<div class="result"><b>✓ ${action==="grade"?"Bewertung abgeschlossen":"Ergebnis übernommen"}</b>${r.explanation?`<p>${escapeHtml(r.explanation)}</p>`:""}${items?`<ol>${items}</ol>`:""}${r.score?`<p class="big-result">${r.score.total}<small>/100</small></p>`:""}${r.lorebook?`<p>${Object.keys(r.lorebook.entries).length} Lorebook-Einträge erstellt.</p>`:""}</div>`;
 }
 
-$("#newBtn").onclick=()=>{if(!confirm("Aktuelle Karte durch eine neue ersetzen? Der letzte Stand bleibt nur im lokalen Entwurf."))return; card=emptyCard(); imageBuffer=null;if(imageUrl)URL.revokeObjectURL(imageUrl);imageUrl="";linkedPath=null;linkedFormat=null;wizardStep=0;resetAiInstruction();score=localScore(card);renderAll();syncLinkedButtons();changed();};
+$("#newBtn").onclick=()=>{if(!confirm("Aktuelle Karte durch eine neue ersetzen? Der letzte Stand bleibt nur im lokalen Entwurf."))return; card=emptyCard();clearPortrait();linkedPath=null;linkedFormat=null;wizardStep=0;resetAiInstruction();score=localScore(card);renderAll();syncLinkedButtons();changed();};
 $("#importBtn").onclick=()=>$("#fileInput").click(); $("#fileInput").onchange=async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(f)try{linkedPath=null;linkedFormat=null;await importFile(f);syncLinkedButtons();}catch(err){toast(err instanceof Error?err.message:String(err),true);}};
 $("#imageBtn").onclick=()=>$("#imageInput").click(); $("#portrait").onclick=()=>$("#imageInput").click(); $("#imageInput").onchange=async e=>{const input=e.target as HTMLInputElement;const f=input.files?.[0];if(!f)return;try{await openCrop(await imageAsPng(f));}catch(error){toast(error instanceof Error?error.message:String(error),true);}finally{input.value="";}};
 $("#cropImageBtn").onclick=()=>{if(imageBuffer)void openCrop(imageBuffer);};
@@ -426,7 +459,7 @@ $("#addLore").onclick=()=>{if(!card.data.character_book)card.data.character_book
 [$("#tags"),$("#creator"),$("#version")].forEach(el=>el.addEventListener("input",()=>{card.data.tags=($(`#tags`) as HTMLInputElement).value.split(",").map(x=>x.trim()).filter(Boolean);card.data.creator=($(`#creator`) as HTMLInputElement).value;card.data.character_version=($(`#version`) as HTMLInputElement).value;changed();}));
 document.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(b=>b.onclick=()=>selectTab(b.dataset.tab!));
 window.addEventListener("dragover",e=>e.preventDefault());window.addEventListener("drop",async e=>{e.preventDefault();const f=e.dataTransfer?.files[0];if(f)try{await importFile(f);}catch(err){toast(err instanceof Error?err.message:String(err),true);}});
-renderAll(); setTimeout(()=>$("#refreshModels").click(),150);
+renderAll(); void restoreDraftPortrait(); setTimeout(()=>$("#refreshModels").click(),150);
 
 const wizardSteps: { field: CoreEditableField; title: string; help: string; instruction: string }[] = [
   { field: "name", title: "Name und Identität", help: "Trage einen Namen, einen Arbeitstitel oder nur eine Namensidee ein.", instruction: "Entwickle einen passenden, einprägsamen Charakternamen aus den Notizen. Gib ausschließlich den Namen im Namensfeld zurück." },
@@ -445,14 +478,10 @@ async function openLibraryCard(bytes: Uint8Array, entry: LibraryEntry) {
     const parsed = extractCard(buffer);
     if (!parsed) throw new Error("Die PNG-Datei enthält keine lesbare Character Card.");
     card = parsed;
-    imageBuffer = buffer;
-    if (imageUrl) URL.revokeObjectURL(imageUrl);
-    imageUrl = URL.createObjectURL(new Blob([buffer], { type: "image/png" }));
+    commitPortrait(buffer);
   } else {
     card = normalizeCard(JSON.parse(new TextDecoder().decode(bytes)));
-    imageBuffer = null;
-    if (imageUrl) URL.revokeObjectURL(imageUrl);
-    imageUrl = "";
+    clearPortrait();
   }
   linkedPath = entry.path;
   linkedFormat = entry.format;
@@ -560,7 +589,7 @@ async function expandWizardStep() {
       selected: [step.field],
       instruction,
       language: ($("#language") as HTMLSelectElement).value,
-      nsfw: ($("#nsfw") as HTMLInputElement).checked
+      nsfw: true
     });
     const value = result.fields?.[step.field];
     if (!value) throw new Error("Ollama hat für dieses Feld keinen Text zurückgegeben.");

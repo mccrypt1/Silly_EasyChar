@@ -2,6 +2,22 @@
 
 All notable changes to Silly EasyChar are documented here. Each release lists English notes first, followed by the German translation.
 
+## v0.2.6
+
+### English
+
+- Persisted the current card portrait in the local app database and restored it with the last editing draft after restarting; the default portrait is now used only when no portrait exists.
+- Kept NSFW-aware Ollama processing permanently enabled while hiding the toggle from the interface.
+- Changed long-running Ollama timers to minutes and seconds after 180 seconds.
+- Added twenty ironic loading hallucinations to both AI progress indicators, rotating randomly every 20–35 seconds without interrupting the spinner.
+
+### Deutsch
+
+- Das Portrait der aktuellen Karte wird in der lokalen App-Datenbank gespeichert und nach einem Neustart zusammen mit dem letzten Bearbeitungsentwurf wiederhergestellt; das Standardportrait erscheint nur noch, wenn kein Portrait vorhanden ist.
+- Die NSFW-bewusste Ollama-Verarbeitung bleibt dauerhaft aktiviert, während der Umschalter aus der Oberfläche ausgeblendet wurde.
+- Lange Ollama-Laufzeiten werden ab 180 Sekunden in Minuten und Sekunden angezeigt.
+- Zwanzig ironische Ladehalluzinationen für beide KI-Fortschrittsanzeigen ergänzt; sie wechseln zufällig alle 20–35 Sekunden, ohne den Ladekreis zu unterbrechen.
+
 ## v0.2.5
 
 ### English
