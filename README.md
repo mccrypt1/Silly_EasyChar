@@ -1,0 +1,53 @@
+# Silly EasyChar
+
+Silly EasyChar is a private-first Windows desktop studio for creating and improving SillyTavern character cards. It runs locally, talks only to a local Ollama instance, and exports real Character Card V2/V3-compatible PNG files.
+
+## Included in the first release
+
+- Structured editor for all important Character Card V2 fields
+- JSON and PNG import/export (synchronized `chara` and `ccv3` PNG chunks)
+- Original portrait attachment without image processing
+- Field-aware rewriting and translation through local Ollama
+- NSFW switch that preserves consensual fictional adult content instead of silently sanitizing it
+- Local and Ollama-assisted card grading
+- Suggestions, alternate greetings, tags, metadata and embedded character lorebooks
+- Automatic local draft saving; no cloud account or telemetry
+
+## Requirements
+
+- Windows 10/11 with WebView2
+- [Ollama](https://ollama.com/) for AI features; editing and import/export work without it
+- Node.js 20+ and Rust for development
+
+## Development
+
+```powershell
+npm install
+npm run desktop
+```
+
+Run tests and build the Windows installers:
+
+```powershell
+npm test
+npm run package
+```
+
+Ollama defaults to `http://127.0.0.1:11434`. Install at least one capable instruct model, for example a recent Qwen, Mistral, or Gemma model that fits your hardware.
+
+## Data and privacy
+
+Character data is saved as a local WebView draft. AI requests are accepted only for `localhost`, `127.0.0.1`, or `::1`; the Rust backend rejects remote URLs. Exported files are created directly in the UI and no card data is uploaded.
+
+## Format notes
+
+PNG export embeds base64-encoded UTF-8 card JSON in the standard `chara` text chunk and a Character Card V3 projection in `ccv3`. Import normalizes V1-style, V2, and V3 data into the V2 editor model while preserving supported fields.
+
+## Roadmap
+
+- Named local library with versions and comparison view
+- Undo/redo for individual AI changes
+- Guided multi-step character and lorebook wizards
+- Portable Windows build and optional application updates
+- More granular lorebook and extension-field editing
+
