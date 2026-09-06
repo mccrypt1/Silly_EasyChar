@@ -1,4 +1,4 @@
-import { normalizeCard } from "./card";
+import { normalizeCard, toV3Card } from "./card";
 import type { CharacterCard } from "./types";
 
 const signature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -58,8 +58,18 @@ function textChunk(key: string, text: string): Uint8Array {
 
 export function embedCard(buffer: ArrayBuffer, card: CharacterCard): Blob {
   const source = chunks(new Uint8Array(buffer));
-  const v2 = textChunk("chara", encode64(JSON.stringify(card)));
-  const v3card = structuredClone(card) as any; v3card.spec = "chara_card_v3"; v3card.spec_version = "3.0";
+  const v2card = structuredClone(card) as any;
+  v2card.spec = "chara_card_v2";
+  v2card.spec_version = "2.0";
+  delete v2card.data.assets;
+  delete v2card.data.nickname;
+  delete v2card.data.creator_notes_multilingual;
+  delete v2card.data.source;
+  delete v2card.data.group_only_greetings;
+  delete v2card.data.creation_date;
+  delete v2card.data.modification_date;
+  const v2 = textChunk("chara", encode64(JSON.stringify(v2card)));
+  const v3card = toV3Card(card);
   const v3 = textChunk("ccv3", encode64(JSON.stringify(v3card)));
   const output: Uint8Array[] = [signature];
   for (const c of source) {

@@ -2,9 +2,9 @@
 
 Silly EasyChar is a private-first Windows desktop studio for creating and improving SillyTavern character cards. It runs locally, talks only to a local Ollama instance, and exports real Character Card V2/V3-compatible PNG files.
 
-## Included in the first release
+## Features
 
-- Structured editor for all important Character Card V2 fields
+- Structured editor for the core Character Card V3 fields with V2 PNG compatibility
 - JSON and PNG import/export (synchronized `chara` and `ccv3` PNG chunks)
 - Original portrait attachment without image processing
 - Field-aware rewriting and translation through local Ollama
@@ -41,7 +41,7 @@ Character data is saved as a local WebView draft. AI requests are accepted only 
 
 ## Format notes
 
-PNG export embeds base64-encoded UTF-8 card JSON in the standard `chara` text chunk and a Character Card V3 projection in `ccv3`. Import normalizes V1-style, V2, and V3 data into the V2 editor model while preserving supported fields.
+PNG export embeds a clean V2 compatibility card in the standard `chara` text chunk and the preferred Character Card V3 object in `ccv3`. JSON export uses V3. Import normalizes V1-style, V2, and V3 data into the V3 editor model while preserving supported fields.
 
 ## Roadmap
 

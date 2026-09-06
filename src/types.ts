@@ -23,6 +23,13 @@ export interface LoreEntry {
   preventRecursion: boolean;
 }
 
+export interface CharacterAsset {
+  type: string;
+  uri: string;
+  name: string;
+  ext: string;
+}
+
 export interface CharacterData {
   name: string;
   description: string;
@@ -39,17 +46,26 @@ export interface CharacterData {
   character_version: string;
   extensions: Record<string, unknown>;
   character_book?: { name?: string; description?: string; entries: LoreEntry[] } | null;
+  assets?: CharacterAsset[];
+  nickname?: string;
+  creator_notes_multilingual?: Record<string, string>;
+  source?: string[];
+  group_only_greetings: string[];
+  creation_date?: number;
+  modification_date?: number;
 }
 
 export interface CharacterCard {
-  spec: "chara_card_v2";
-  spec_version: "2.0";
+  spec: "chara_card_v2" | "chara_card_v3";
+  spec_version: "2.0" | "3.0";
   data: CharacterData;
 }
 
-export type EditableField = keyof Pick<CharacterData,
+export type CoreEditableField = keyof Pick<CharacterData,
   "name" | "description" | "personality" | "scenario" | "first_mes" | "mes_example" |
   "creator_notes" | "system_prompt" | "post_history_instructions">;
+
+export type EditableField = CoreEditableField | `alternate_greeting:${number}`;
 
 export interface AiResult {
   fields?: Partial<Record<EditableField, string>>;

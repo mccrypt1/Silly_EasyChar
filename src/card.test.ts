@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emptyCard, normalizeCardPlaceholders, normalizePlaceholders } from "./card";
+import { CREATOR_NOTE_STAMP, emptyCard, normalizeCardPlaceholders, normalizeLoreEntry, normalizePlaceholders, prepareCardForExport, toV3Card } from "./card";
 
 describe("SillyTavern placeholders", () => {
   it("normalizes bare and spaced user/char placeholders", () => {
@@ -22,6 +22,37 @@ describe("SillyTavern placeholders", () => {
     };
     normalizeCardPlaceholders(card);
     expect([card.data.scenario, card.data.alternate_greetings[0], card.data.character_book.entries[0].content])
-      .toEqual(["Der {{user}} trifft den {{char}}.", "Hallo {{user}}", "{{char}} kennt {{user}}."]);
+      .toEqual(["{{user}} trifft {{char}}.", "Hallo {{user}}", "{{char}} kennt {{user}}."]);
   });
 });
+
+  it("removes German articles and expands contractions before placeholders", () => {
+    const text = "Der {{user}} geht an den User und wartet beim Char. Danach spricht die {{char}} mit dem {{user}}.";
+    expect(normalizePlaceholders(text))
+      .toBe("{{user}} geht an {{user}} und wartet bei {{char}}. Danach spricht {{char}} mit {{user}}.");
+  });
+
+  it("adds the creator stamp only to an export copy", () => {
+    const card = emptyCard();
+    card.data.creator_notes = "Eigene Hinweise zuerst.";
+    const exported = prepareCardForExport(card);
+    expect(card.data.creator_notes).toBe("Eigene Hinweise zuerst.");
+    expect(exported.data.creator_notes).toBe(`Eigene Hinweise zuerst.\n\n${CREATOR_NOTE_STAMP}`);
+    expect(prepareCardForExport(exported).data.creator_notes.match(/Silly EasyChar Studio/g)).toHaveLength(1);
+    expect(exported.spec).toBe("chara_card_v3");
+    expect(exported.data.group_only_greetings).toEqual([]);
+    expect(exported.data.assets?.[0]).toEqual({ type: "icon", uri: "ccdefault:", name: "main", ext: "png" });
+  });
+
+  it("projects internal lorebook entries to Character Card V3 fields", () => {
+    const card = emptyCard();
+    card.data.character_book = { entries: [normalizeLoreEntry({
+      uid: 7, key: ["Bakery"], keysecondary: ["Cassandra"], comment: "Workplace",
+      content: "{{char}} works here.", selective: true, order: 250
+    }, 7)] };
+    const entry = (toV3Card(card).data.character_book as any).entries[0];
+    expect(entry).toMatchObject({ keys: ["Bakery"], secondary_keys: ["Cassandra"], enabled: true, insertion_order: 250, use_regex: false });
+    expect(entry.key).toBeUndefined();
+    expect(entry.disable).toBeUndefined();
+    expect(entry.order).toBeUndefined();
+  });

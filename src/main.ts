@@ -1,12 +1,12 @@
 import "./style.css";
-import { emptyCard, localScore, normalizeCard, normalizeCardPlaceholders, normalizeLoreEntry, normalizePlaceholders } from "./card";
+import { emptyCard, localScore, normalizeCard, normalizeLoreEntry, normalizePlaceholders, prepareCardForExport, toV3Card } from "./card";
 import { embedCard, extractCard, imageAsPng } from "./png";
 import { models, runAi } from "./ai";
 import { CardLibrary } from "./library";
 import type { LibraryEntry } from "./library";
-import type { AiResult, CharacterCard, EditableField, ScoreResult } from "./types";
+import type { AiResult, CharacterCard, CoreEditableField, EditableField, ScoreResult } from "./types";
 
-const textFields: { key: EditableField; label: string; rows: number; hint: string }[] = [
+const textFields: { key: CoreEditableField; label: string; rows: number; hint: string }[] = [
   { key: "name", label: "Name", rows: 1, hint: "Name der Figur" },
   { key: "description", label: "Beschreibung", rows: 9, hint: "Aussehen, Identität, Hintergrund, Fähigkeiten …" },
   { key: "personality", label: "Persönlichkeit", rows: 6, hint: "Eigenschaften, Ziele, Ängste, Verhalten …" },
@@ -21,7 +21,7 @@ const textFields: { key: EditableField; label: string; rows: number; hint: strin
 let card = loadDraft();
 let imageBuffer: ArrayBuffer | null = null;
 let imageUrl = "";
-let activeField: EditableField = "description";
+let activeField: CoreEditableField = "description";
 let selected = new Set<EditableField>(["description", "personality", "scenario", "first_mes"]);
 let score: ScoreResult = localScore(card);
 let aiBusy = false;
@@ -33,7 +33,7 @@ let wizardStep = 0;
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <header class="topbar">
-    <div class="brand"><div class="brand-mark">S</div><div><strong>Silly EasyChar</strong><small>Offline Character Studio</small></div></div>
+    <div class="brand"><div class="brand-mark">S</div><div><strong>Silly EasyChar</strong><small>Offline Character Studio</small></div><a class="brand-watermark" href="https://github.com/mccrypt1/Silly_EasyChar" target="_blank" rel="noreferrer" title="Silly EasyChar auf GitHub">mccrypt1</a></div>
     <div class="top-actions">
       <button id="newBtn" class="ghost">＋ Neu</button><button id="importBtn" class="ghost">↥ Import</button>
       <button id="saveLinkedBtn" class="primary hidden">In SillyTavern speichern</button><button id="addFolderBtn" class="ghost hidden">Zum ST-Ordner</button>
@@ -105,20 +105,36 @@ function changed() { $("#saveState").textContent = "Speichert …"; score = loca
 function renderFields() {
   $("#fields").innerHTML = textFields.map(f => `<article class="field ${activeField === f.key ? "focused" : ""}" data-key="${f.key}"><div class="field-head"><label>${f.label}</label><span>${card.data[f.key].length} Zeichen</span></div>${f.rows === 1 ? `<input data-field="${f.key}" value="${escapeAttr(card.data[f.key])}" placeholder="${escapeAttr(f.hint)}" />` : `<textarea data-field="${f.key}" rows="${f.rows}" placeholder="${escapeAttr(f.hint)}">${escapeHtml(card.data[f.key])}</textarea>`}</article>`).join("");
   document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("[data-field]").forEach(el => {
-    el.addEventListener("focus", () => { activeField = el.dataset.field as EditableField; document.querySelectorAll(".field").forEach(n => n.classList.toggle("focused", (n as HTMLElement).dataset.key === activeField)); });
-    el.addEventListener("input", () => { card.data[el.dataset.field as EditableField] = el.value; el.closest(".field")!.querySelector("span")!.textContent = `${el.value.length} Zeichen`; changed(); });
-    el.addEventListener("change", () => { const value = normalizePlaceholders(el.value); if (value !== el.value) { el.value = value; card.data[el.dataset.field as EditableField] = value; changed(); } });
+    el.addEventListener("focus", () => { activeField = el.dataset.field as CoreEditableField; document.querySelectorAll(".field").forEach(n => n.classList.toggle("focused", (n as HTMLElement).dataset.key === activeField)); });
+    el.addEventListener("input", () => { card.data[el.dataset.field as CoreEditableField] = el.value; el.closest(".field")!.querySelector("span")!.textContent = `${el.value.length} Zeichen`; changed(); });
+    el.addEventListener("change", () => { const value = normalizePlaceholders(el.value); if (value !== el.value) { el.value = value; card.data[el.dataset.field as CoreEditableField] = value; changed(); } });
   });
 }
+function greetingField(index: number): EditableField { return `alternate_greeting:${index}`; }
 function renderChecks() {
-  $("#fieldChecks").innerHTML = textFields.slice(0, 6).map(f => `<label class="check"><input type="checkbox" data-check="${f.key}" ${selected.has(f.key) ? "checked" : ""}/><span>${f.label}</span></label>`).join("");
+  const core = textFields.slice(0, 6).map(f => `<label class="check"><input type="checkbox" data-check="${f.key}" ${selected.has(f.key) ? "checked" : ""}/><span>${f.label}</span></label>`).join("");
+  const greetings = card.data.alternate_greetings.map((_, index) => { const key = greetingField(index); return `<label class="check"><input type="checkbox" data-check="${key}" ${selected.has(key) ? "checked" : ""}/><span>Alternative Begrüßung ${index + 1}</span></label>`; }).join("");
+  $("#fieldChecks").innerHTML = core + greetings;
   document.querySelectorAll<HTMLInputElement>("[data-check]").forEach(c => c.onchange = () => { const k = c.dataset.check as EditableField; c.checked ? selected.add(k) : selected.delete(k); });
+}
+function removeGreeting(index: number) {
+  const next = new Set<EditableField>();
+  for (const key of selected) {
+    if (!key.startsWith("alternate_greeting:")) next.add(key);
+    else { const oldIndex = Number(key.split(":")[1]); if (oldIndex < index) next.add(key); else if (oldIndex > index) next.add(greetingField(oldIndex - 1)); }
+  }
+  selected = next;
+  card.data.alternate_greetings.splice(index, 1);
+  renderExtras(); renderChecks(); changed();
 }
 function renderExtras() {
   ($("#tags") as HTMLInputElement).value = card.data.tags.join(", "); ($("#creator") as HTMLInputElement).value = card.data.creator; ($("#version") as HTMLInputElement).value = card.data.character_version;
-  $("#greetings").innerHTML = card.data.alternate_greetings.map((g, i) => `<div class="repeat"><textarea rows="5" data-greeting="${i}">${escapeHtml(g)}</textarea><button data-remove-greeting="${i}">×</button></div>`).join("") || `<p class="muted">Noch keine alternativen Begrüßungen.</p>`;
-  document.querySelectorAll<HTMLTextAreaElement>("[data-greeting]").forEach(el => el.oninput = () => { card.data.alternate_greetings[Number(el.dataset.greeting)] = el.value; changed(); });
-  document.querySelectorAll<HTMLButtonElement>("[data-remove-greeting]").forEach(el => el.onclick = () => { card.data.alternate_greetings.splice(Number(el.dataset.removeGreeting), 1); renderExtras(); changed(); });
+  $("#greetings").innerHTML = card.data.alternate_greetings.map((g, i) => `<div class="repeat"><textarea rows="5" data-greeting="${i}" placeholder="Alternative Begrüßung ${i + 1}">${escapeHtml(g)}</textarea><button data-remove-greeting="${i}">×</button></div>`).join("") || `<p class="muted">Noch keine alternativen Begrüßungen.</p>`;
+  document.querySelectorAll<HTMLTextAreaElement>("[data-greeting]").forEach(el => {
+    el.oninput = () => { card.data.alternate_greetings[Number(el.dataset.greeting)] = el.value; changed(); };
+    el.onchange = () => { const index = Number(el.dataset.greeting); const value = normalizePlaceholders(el.value); if (value !== el.value) { el.value = value; card.data.alternate_greetings[index] = value; changed(); } };
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-remove-greeting]").forEach(el => el.onclick = () => removeGreeting(Number(el.dataset.removeGreeting)));
 }
 function renderLore() {
   const entries = card.data.character_book?.entries ?? [];
@@ -149,7 +165,18 @@ async function ai(action: "edit"|"translate"|"suggest"|"grade"|"lorebook") {
   finally { aiBusy=false; document.body.classList.remove("busy"); }
 }
 function applyAiResult(r: AiResult, action: string) {
-  if(r.fields){ for(const [k,v] of Object.entries(r.fields)) if(typeof v==="string" && selected.has(k as EditableField)) (card.data as any)[k]=v; renderFields(); changed(); }
+  if(r.fields){
+    for(const [key,value] of Object.entries(r.fields)){
+      if(typeof value!=="string" || !selected.has(key as EditableField)) continue;
+      if(key.startsWith("alternate_greeting:")){
+        const index=Number(key.split(":")[1]);
+        if(Number.isInteger(index) && index>=0 && index<card.data.alternate_greetings.length) card.data.alternate_greetings[index]=value;
+      } else {
+        card.data[key as CoreEditableField]=value;
+      }
+    }
+    renderFields(); renderExtras(); renderChecks(); changed();
+  }
   if(r.score){ score=r.score; renderScore(r.score); }
   if(action==="grade" && r.score?.findings.length){
     const instruction = $("#instruction") as HTMLTextAreaElement;
@@ -165,19 +192,19 @@ function applyAiResult(r: AiResult, action: string) {
 $("#newBtn").onclick=()=>{if(!confirm("Aktuelle Karte durch eine neue ersetzen? Der letzte Stand bleibt nur im lokalen Entwurf."))return; card=emptyCard(); imageBuffer=null;if(imageUrl)URL.revokeObjectURL(imageUrl);imageUrl="";linkedPath=null;linkedFormat=null;wizardStep=0;score=localScore(card);renderAll();syncLinkedButtons();changed();};
 $("#importBtn").onclick=()=>$("#fileInput").click(); $("#fileInput").onchange=async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(f)try{linkedPath=null;linkedFormat=null;await importFile(f);syncLinkedButtons();}catch(err){toast(err instanceof Error?err.message:String(err),true);}};
 $("#imageBtn").onclick=()=>$("#imageInput").click(); $("#portrait").onclick=()=>$("#imageInput").click(); $("#imageInput").onchange=async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(!f)return;imageBuffer=await imageAsPng(f);if(imageUrl)URL.revokeObjectURL(imageUrl);imageUrl=URL.createObjectURL(new Blob([imageBuffer],{type:"image/png"}));renderPortrait();toast("Portrait übernommen.");};
-$("#jsonBtn").onclick=()=>{normalizeCardPlaceholders(card);renderAll();changed();download(new Blob([JSON.stringify(card,null,2)],{type:"application/json"}),`${card.data.name||"character"}.json`);};
-$("#pngBtn").onclick=()=>{if(!imageBuffer){toast("Bitte zuerst ein Portrait wählen.",true);return;}normalizeCardPlaceholders(card);renderAll();changed();download(embedCard(imageBuffer,card),`${card.data.name||"character"}.png`);toast("Character-Card-PNG erstellt.");};
+$("#jsonBtn").onclick=()=>{const output=toV3Card(prepareCardForExport(card));download(new Blob([JSON.stringify(output,null,2)],{type:"application/json"}),`${card.data.name||"character"}.json`);};
+$("#pngBtn").onclick=()=>{if(!imageBuffer){toast("Bitte zuerst ein Portrait wählen.",true);return;}const output=prepareCardForExport(card);download(embedCard(imageBuffer,output),`${card.data.name||"character"}.png`);toast("Character-Card-PNG erstellt.");};
 $("#refreshModels").onclick=async()=>{const url=($(`#ollamaUrl`) as HTMLInputElement).value;localStorage.setItem("ollamaUrl",url);const sel=$(`#model`) as HTMLSelectElement;sel.innerHTML=`<option>Lädt …</option>`;try{const list=await models(url);sel.innerHTML=list.map(m=>`<option>${escapeHtml(m)}</option>`).join("")||`<option value="">Keine Modelle gefunden</option>`;const last=localStorage.getItem("model");if(last&&list.includes(last))sel.value=last;toast(`${list.length} Ollama-Modelle gefunden.`);}catch(e){sel.innerHTML=`<option value="">Ollama nicht erreichbar</option>`;toast(e instanceof Error?e.message:String(e),true);}};
-$("#model").onchange=e=>localStorage.setItem("model",(e.target as HTMLSelectElement).value); $("#allFields").onclick=()=>{selected=new Set(textFields.slice(0,6).map(x=>x.key));renderChecks();};
+$("#model").onchange=e=>localStorage.setItem("model",(e.target as HTMLSelectElement).value); $("#allFields").onclick=()=>{selected=new Set<EditableField>([...textFields.slice(0,6).map(x=>x.key),...card.data.alternate_greetings.map((_,index)=>greetingField(index))]);renderChecks();};
 $("#editAi").onclick=()=>ai("edit"); document.querySelectorAll<HTMLButtonElement>("[data-ai]").forEach(b=>b.onclick=()=>ai(b.dataset.ai as any));
-$("#addGreeting").onclick=()=>{card.data.alternate_greetings.push("");renderExtras();changed();};
+$("#addGreeting").onclick=()=>{const index=card.data.alternate_greetings.push("")-1;selected.add(greetingField(index));renderExtras();renderChecks();changed();};
 $("#addLore").onclick=()=>{if(!card.data.character_book)card.data.character_book={name:`${card.data.name} Lorebook`,entries:[]};const i=card.data.character_book.entries.length;card.data.character_book.entries.push(normalizeLoreEntry({},i));renderLore();changed();};
 [$("#tags"),$("#creator"),$("#version")].forEach(el=>el.addEventListener("input",()=>{card.data.tags=($(`#tags`) as HTMLInputElement).value.split(",").map(x=>x.trim()).filter(Boolean);card.data.creator=($(`#creator`) as HTMLInputElement).value;card.data.character_version=($(`#version`) as HTMLInputElement).value;changed();}));
 document.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(b=>b.onclick=()=>selectTab(b.dataset.tab!));
 window.addEventListener("dragover",e=>e.preventDefault());window.addEventListener("drop",async e=>{e.preventDefault();const f=e.dataTransfer?.files[0];if(f)try{await importFile(f);}catch(err){toast(err instanceof Error?err.message:String(err),true);}});
 renderAll(); setTimeout(()=>$("#refreshModels").click(),150);
 
-const wizardSteps: { field: EditableField; title: string; help: string; instruction: string }[] = [
+const wizardSteps: { field: CoreEditableField; title: string; help: string; instruction: string }[] = [
   { field: "name", title: "Name und Identität", help: "Trage einen Namen, einen Arbeitstitel oder nur eine Namensidee ein.", instruction: "Entwickle einen passenden, einprägsamen Charakternamen aus den Notizen. Gib ausschließlich den Namen im Namensfeld zurück." },
   { field: "description", title: "Konzept, Aussehen und Hintergrund", help: "Stichpunkte reichen: Rolle, Alter, Erscheinung, Herkunft, Fähigkeiten, Eigenheiten oder lose Ideen.", instruction: "Erstelle eine klar strukturierte Character-Card-Beschreibung aus den Notizen. Behalte Persönlichkeit, Szenario und Rollenspielregeln aus diesem Feld heraus." },
   { field: "personality", title: "Persönlichkeit und Motivation", help: "Wie denkt und fühlt die Figur? Ziele, Ängste, Widersprüche, Grenzen und typische Reaktionen.", instruction: "Entwickle aus den Notizen eine nuancierte, spielbare Persönlichkeit mit Motivationen, Schwächen und konsistentem Verhalten." },
@@ -186,7 +213,7 @@ const wizardSteps: { field: EditableField; title: string; help: string; instruct
   { field: "mes_example", title: "Dialogbeispiele", help: "Nenne gewünschte Stimme, Redewendungen oder Situationen. Ollama erzeugt daraus abwechslungsreiche Beispiele.", instruction: "Erstelle 3 bis 5 kontrastreiche Dialogwechsel im SillyTavern-Format mit <START>, {{user}}: und {{char}}:. Zeige Stimme und emotionale Bandbreite." },
   { field: "system_prompt", title: "Rollenspielregeln", help: "Optional: Regeln zu Perspektive, Initiative, Erzählstil, Grenzen und Verhalten.", instruction: "Formuliere kurze, robuste Rollenspielregeln. Bewahre Charaktertreue und verbiete das Sprechen oder Entscheiden für {{user}}." }
 ];
-const wizardDrafts: Partial<Record<EditableField, string>> = {};
+const wizardDrafts: Partial<Record<CoreEditableField, string>> = {};
 
 async function openLibraryCard(bytes: Uint8Array, entry: LibraryEntry) {
   const buffer = bytes.slice().buffer as ArrayBuffer;
@@ -213,11 +240,10 @@ async function openLibraryCard(bytes: Uint8Array, entry: LibraryEntry) {
 }
 
 async function currentBytes(format: "PNG" | "JSON"): Promise<Uint8Array> {
-  normalizeCardPlaceholders(card);
-  renderAll();
-  if (format === "JSON") return new TextEncoder().encode(JSON.stringify(card, null, 2));
+  const output = prepareCardForExport(card);
+  if (format === "JSON") return new TextEncoder().encode(JSON.stringify(toV3Card(output), null, 2));
   if (!imageBuffer) throw new Error("Für eine PNG-Karte wird ein Portrait benötigt.");
-  return new Uint8Array(await embedCard(imageBuffer, card).arrayBuffer());
+  return new Uint8Array(await embedCard(imageBuffer, output).arrayBuffer());
 }
 
 function syncLinkedButtons() {
