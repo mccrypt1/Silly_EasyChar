@@ -135,7 +135,14 @@ export function toV3Card(card: CharacterCard): CharacterCard {
         id: entry.id ?? entry.uid,
         comment: entry.comment,
         selective: !!entry.selective,
-        secondary_keys: entry.keysecondary ?? entry.secondary_keys ?? []
+        secondary_keys: entry.keysecondary ?? entry.secondary_keys ?? [],
+        position: Number(entry.position ?? 0),
+        probability: Number(entry.probability ?? 100),
+        useProbability: entry.useProbability !== false,
+        depth: Number(entry.depth ?? 4),
+        selectiveLogic: Number(entry.selectiveLogic ?? 0),
+        excludeRecursion: !!entry.excludeRecursion,
+        preventRecursion: !!entry.preventRecursion
       }))
     };
   }
@@ -159,7 +166,7 @@ export function normalizeLoreEntry(e: any, uid: number): LoreEntry {
     position: Number(e?.position ?? 0), disable: e?.disable === undefined ? e?.enabled === false : !!e.disable, probability: Number(e?.probability ?? 100),
     useProbability: e?.useProbability !== false, depth: Number(e?.depth ?? 4), delay: Number(e?.delay ?? 0),
     cooldown: Number(e?.cooldown ?? 0), sticky: Number(e?.sticky ?? 0), vectorized: false,
-    ignoreBudget: !!e?.ignoreBudget, excludeRecursion: false, preventRecursion: !!e?.preventRecursion
+    ignoreBudget: !!e?.ignoreBudget, excludeRecursion: !!e?.excludeRecursion, preventRecursion: !!e?.preventRecursion
   };
 }
 

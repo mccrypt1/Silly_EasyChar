@@ -41,5 +41,19 @@ describe("Ollama result handling", () => {
     expect(request.prompt).toContain("3–5 separate <START> blocks");
     expect(invoke).toHaveBeenCalledTimes(1);
   });
+
+  it("asks Ollama to choose contextual lorebook activation settings", async () => {
+    const invoke = vi.fn().mockResolvedValue('{"lorebook":{"entries":{}}}');
+    vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });
+    await runAi({
+      baseUrl: "http://127.0.0.1:8787", model: "test", action: "lorebook",
+      card: emptyCard(), selected: [], instruction: "", language: "Deutsch", nsfw: true
+    });
+    const request = invoke.mock.calls[0][1] as { prompt: string };
+    expect(request.prompt).toContain("Choose settings per entry");
+    expect(request.prompt).toContain("position 0 for general world facts");
+    expect(request.prompt).toContain("Probability should normally be 100");
+    expect(request.prompt).toContain("Depth matters only at position 4");
+  });
 });
 

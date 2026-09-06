@@ -48,10 +48,11 @@ describe("SillyTavern placeholders", () => {
     const card = emptyCard();
     card.data.character_book = { entries: [normalizeLoreEntry({
       uid: 7, key: ["Bakery"], keysecondary: ["Cassandra"], comment: "Workplace",
-      content: "{{char}} works here.", selective: true, order: 250
+      content: "{{char}} works here.", selective: true, order: 250, position: 1,
+      probability: 75, depth: 6, excludeRecursion: true, preventRecursion: true
     }, 7)] };
     const entry = (toV3Card(card).data.character_book as any).entries[0];
-    expect(entry).toMatchObject({ keys: ["Bakery"], secondary_keys: ["Cassandra"], enabled: true, insertion_order: 250, use_regex: false });
+    expect(entry).toMatchObject({ keys: ["Bakery"], secondary_keys: ["Cassandra"], enabled: true, insertion_order: 250, use_regex: false, position: 1, probability: 75, depth: 6, excludeRecursion: true, preventRecursion: true });
     expect(entry.key).toBeUndefined();
     expect(entry.disable).toBeUndefined();
     expect(entry.order).toBeUndefined();

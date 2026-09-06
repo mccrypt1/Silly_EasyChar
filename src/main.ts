@@ -79,22 +79,23 @@ app.innerHTML = `
         <label class="full talkativeness">Talkativeness · Gruppenchat-Antwortchance <output id="talkativenessValue">50%</output><input id="talkativeness" type="range" min="0" max="100" step="1" value="50" /><small>0% = sehr zurückhaltend · 50% = normal · 100% = sehr gesprächig</small></label>
       </div></div>
       <div id="tab-lore" class="tab-page"><div class="lore-head"><div><h2>Character Lorebook</h2><p>Schlüsselwortgesteuerte Details für Orte, Figuren, Regeln und Gegenstände.</p></div><button id="addLore" class="ghost">＋ Eintrag</button></div><div id="loreEntries"></div></div>
-    </section>
-    <aside class="ai-panel">
       <div id="tab-wizard" class="tab-page">
         <div class="wizard">
           <div class="wizard-progress"><span id="wizardCount"></span><i><b id="wizardBar"></b></i></div>
           <div class="wizard-card">
             <small>SCHRITT-FÜR-SCHRITT-CARD</small><h2 id="wizardTitle"></h2><p id="wizardHelp"></p>
-            <label>Deine Stichpunkte, Ideen oder ein fertiger Text</label>
-            <textarea id="wizardNotes" rows="9"></textarea>
-            <div class="wizard-preview"><span>Aktueller Feldinhalt</span><p id="wizardCurrent"></p></div>
+            <div id="wizardDetails" class="wizard-detail-grid"></div>
+            <label>Weitere Stichpunkte, Ideen oder ein fertiger Text</label>
+            <textarea id="wizardNotes" rows="7"></textarea>
+            <div class="wizard-preview"><span>AKTUELLER FELDINHALT</span><p id="wizardCurrent"></p></div>
             <div class="wizard-actions"><button id="wizardBack" class="ghost">← Zurück</button><button id="wizardUse" class="ghost">Notizen übernehmen</button><button id="wizardAi" class="primary">✦ Mit Ollama ausarbeiten</button><button id="wizardNext" class="ghost">Weiter →</button></div>
             <div id="wizardThinking" class="hidden"></div>
           </div>
           <div class="wizard-done hidden" id="wizardDone"><span>✓</span><h2>Grundkarte vollständig</h2><p>Alle Inhalte wurden in die passenden Character-Card-Felder übernommen. Du kannst sie nun im normalen Editor verfeinern.</p><button id="wizardFinish" class="primary">Zum Character Editor</button></div>
         </div>
       </div>
+    </section>
+    <aside class="ai-panel">
       <div class="ai-head"><div class="ai-avatar">✦</div><div><strong>Lokaler Schreibassistent</strong><small>Ollama · Daten bleiben auf deinem PC</small></div></div>
       <div class="quick-actions"><button data-ai="suggest">Ideen</button><button data-ai="grade">Bewerten</button><button data-ai="translate">Übersetzen</button><button data-ai="lorebook">Lorebook</button></div>
       <div class="selection"><div class="field-head"><b>Felder für Bearbeitung</b><button id="allFields" class="link">alle</button></div><div id="fieldChecks"></div></div>
@@ -165,8 +166,9 @@ function renderExtras() {
 }
 function renderLore() {
   const entries = card.data.character_book?.entries ?? [];
-  $("#loreEntries").innerHTML = entries.map((e, i) => `<article class="lore-entry"><div class="field-head"><b>${escapeHtml(e.comment || `Eintrag ${i + 1}`)}</b><button data-remove-lore="${i}" class="danger-link">Entfernen</button></div><div class="lore-grid"><label>Titel<input data-lore="comment" data-i="${i}" value="${escapeAttr(e.comment)}" /></label><label>Schlüsselwörter<input data-lore="key" data-i="${i}" value="${escapeAttr(e.key.join(", "))}" /></label><label class="full">Inhalt<textarea rows="5" data-lore="content" data-i="${i}">${escapeHtml(e.content)}</textarea></label><label>Position<select data-lore="position" data-i="${i}">${[0,1,2,3,4].map(n => `<option ${e.position===n?"selected":""}>${n}</option>`).join("")}</select></label><label>Priorität<input type="number" data-lore="order" data-i="${i}" value="${e.order}" /></label><label class="check"><input type="checkbox" data-lore="constant" data-i="${i}" ${e.constant?"checked":""}/><span>Immer aktiv</span></label><label class="check"><input type="checkbox" data-lore="preventRecursion" data-i="${i}" ${e.preventRecursion?"checked":""}/><span>Rekursion stoppen</span></label></div></article>`).join("") || `<div class="empty-lore"><span>⌁</span><h3>Noch kein Lorebook</h3><p>Füge Einträge manuell hinzu oder lasse Ollama passende Einträge erzeugen.</p></div>`;
-  document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("[data-lore]").forEach(el => el.oninput = () => { const e = entries[Number(el.dataset.i)]; const key = el.dataset.lore!; if (key === "key") e.key = el.value.split(",").map(x=>x.trim()).filter(Boolean); else if (key === "constant" || key === "preventRecursion") (e as any)[key] = (el as HTMLInputElement).checked; else if (key === "position" || key === "order") (e as any)[key] = Number(el.value); else (e as any)[key] = el.value; changed(); });
+  const positions = [[0,"Vor Character Definition"],[1,"Nach Character Definition"],[5,"Vor Dialogbeispielen"],[6,"Nach Dialogbeispielen"],[2,"Oben in Author's Note"],[3,"Unten in Author's Note"],[4,"Im Chat bei Tiefe"]] as const;
+  $("#loreEntries").innerHTML = entries.map((e, i) => `<article class="lore-entry"><div class="field-head"><b>${escapeHtml(e.comment || `Eintrag ${i + 1}`)}</b><button data-remove-lore="${i}" class="danger-link">Entfernen</button></div><div class="lore-grid"><label>Titel<input data-lore="comment" data-i="${i}" value="${escapeAttr(e.comment)}" /></label><label>Primäre Schlüsselwörter<input data-lore="key" data-i="${i}" value="${escapeAttr(e.key.join(", "))}" /></label><label>Sekundäre Schlüsselwörter<input data-lore="keysecondary" data-i="${i}" value="${escapeAttr(e.keysecondary.join(", "))}" placeholder="Optional zur Eingrenzung" /></label><label class="full">Inhalt<textarea rows="6" data-lore="content" data-i="${i}">${escapeHtml(e.content)}</textarea></label><label class="lore-position">Position<select data-lore="position" data-i="${i}">${positions.map(([n,label]) => `<option value="${n}" ${e.position===n?"selected":""}>${label}</option>`).join("")}</select></label><label>Priorität / Reihenfolge<input type="number" data-lore="order" data-i="${i}" value="${e.order}" /></label><label>Wahrscheinlichkeit<input type="number" min="0" max="100" data-lore="probability" data-i="${i}" value="${e.probability}" /></label><label>Tiefe (nur „Im Chat“)<input type="number" min="0" data-lore="depth" data-i="${i}" value="${e.depth}" /></label><label class="check"><input type="checkbox" data-lore="constant" data-i="${i}" ${e.constant?"checked":""}/><span>Immer aktiv</span></label><label class="check"><input type="checkbox" data-lore="selective" data-i="${i}" ${e.selective?"checked":""}/><span>Sekundärschlüssel verlangen</span></label><label class="check"><input type="checkbox" data-lore="excludeRecursion" data-i="${i}" ${e.excludeRecursion?"checked":""}/><span>Nicht rekursiv aktivieren</span></label><label class="check"><input type="checkbox" data-lore="preventRecursion" data-i="${i}" ${e.preventRecursion?"checked":""}/><span>Weitere Rekursion stoppen</span></label></div></article>`).join("") || `<div class="empty-lore"><span>⌁</span><h3>Noch kein Lorebook</h3><p>Füge Einträge manuell hinzu oder lasse Ollama passende Einträge erzeugen.</p></div>`;
+  document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("[data-lore]").forEach(el => el.oninput = () => { const e = entries[Number(el.dataset.i)]; const key = el.dataset.lore!; if (key === "key" || key === "keysecondary") (e as any)[key] = el.value.split(",").map(x=>x.trim()).filter(Boolean); else if (["constant","selective","excludeRecursion","preventRecursion"].includes(key)) (e as any)[key] = (el as HTMLInputElement).checked; else if (["position","order","probability","depth"].includes(key)) (e as any)[key] = Number(el.value); else (e as any)[key] = el.value; changed(); });
   document.querySelectorAll<HTMLButtonElement>("[data-remove-lore]").forEach(b => b.onclick = () => { entries.splice(Number(b.dataset.removeLore), 1); entries.forEach((e,i)=>e.uid=i); renderLore(); changed(); });
 }
 function renderScore(s = score) {
@@ -343,7 +345,7 @@ async function loadBuildInfo() {
   try {
     const info = await window.__TAURI__?.core.invoke<{ version: string; commit: string }>("build_info");
     if (info) $("#buildInfo").textContent = `v${info.version} · ${info.commit}`;
-  } catch { $("#buildInfo").textContent = "v0.2.8 · development"; }
+  } catch { $("#buildInfo").textContent = "v0.2.9 · development"; }
 }
 async function importFile(file: File) {
   if (file.name.toLowerCase().endsWith(".json")) { card=normalizeCard(JSON.parse(await file.text())); clearPortrait(); }
@@ -477,6 +479,17 @@ const wizardSteps: { field: CoreEditableField; title: string; help: string; inst
   { field: "system_prompt", title: "Rollenspielregeln", help: "Optional: Regeln zu Perspektive, Initiative, Erzählstil, Grenzen und Verhalten.", instruction: "Formuliere kurze, robuste Rollenspielregeln. Bewahre Charaktertreue und verbiete das Sprechen oder Entscheiden für {{user}}." }
 ];
 const wizardDrafts: Partial<Record<CoreEditableField, string>> = {};
+const wizardPrompts: Record<CoreEditableField, [string,string][]> = {
+  name: [["Rolle oder Arbeitstitel","z. B. Ermittlerin, Hexe, Lieferfahrerin"],["Herkunft oder Kultur","Region, Epoche, Spezies oder Milieu"],["Namensstil","modern, elegant, ungewöhnlich, Spitzname …"]],
+  description: [["Identität","Alter, Spezies, Beruf, Rolle"],["Aussehen und Kleidung","Körperbau, Merkmale, Stil"],["Hintergrund und Fähigkeiten","Herkunft, Geschichte, Können"]],
+  personality: [["Kerneigenschaften","Stärken, Schwächen, Widersprüche"],["Ziele und Ängste","Wünsche, Bedürfnisse, Konflikte"],["Eigenheiten und Grenzen","Gewohnheiten, Vorlieben, Tabus"]],
+  scenario: [["Ort und Zeit","Wo und wann beginnt die Szene?"],["Beziehung zu {{user}}","Wie kennen sie sich oder begegnen sie sich?"],["Auslöser und Konflikt","Was passiert gerade, was steht auf dem Spiel?"]],
+  first_mes: [["Atmosphäre","Stimmung, Umgebung, Sinneseindrücke"],["Handlung von {{char}}","Was tut die Figur sichtbar?"],["Gesprächsaufhänger","Frage, Problem, Angebot oder Konflikt"]],
+  mes_example: [["Stimme und Wortwahl","Ton, Dialekt, Satzlänge, Redewendungen"],["Situationen und Emotionen","Welche Kontraste sollen vorkommen?"],["Vermeiden","Unpassende Floskeln, Stilbrüche, Slop"]],
+  system_prompt: [["Perspektive und Format","Ich-/Er-Perspektive, Handlung, Dialog"],["Initiative und Tempo","Wie aktiv und ausführlich soll {{char}} sein?"],["Grenzen und Anti-Slop","Was darf das Modell nie tun?"]],
+  creator_notes: [], post_history_instructions: []
+};
+const wizardDetails: Partial<Record<CoreEditableField, string[]>> = {};
 
 async function openLibraryCard(bytes: Uint8Array, entry: LibraryEntry) {
   const buffer = bytes.slice().buffer as ArrayBuffer;
@@ -560,15 +573,28 @@ function renderWizard() {
   ($("#wizardBar") as HTMLElement).style.width = ((wizardStep + 1) / wizardSteps.length * 100) + "%";
   $("#wizardTitle").textContent = step.title;
   $("#wizardHelp").textContent = step.help;
+  const prompts = wizardPrompts[step.field];
+  const values = wizardDetails[step.field] ?? prompts.map(() => "");
+  wizardDetails[step.field] = values;
+  $("#wizardDetails").innerHTML = prompts.map(([label,placeholder], index) => `<label>${escapeHtml(label)}<textarea rows="3" data-wizard-detail="${index}" placeholder="${escapeAttr(placeholder)}">${escapeHtml(values[index] ?? "")}</textarea></label>`).join("");
+  document.querySelectorAll<HTMLTextAreaElement>("[data-wizard-detail]").forEach(el => el.oninput = () => { values[Number(el.dataset.wizardDetail)] = el.value; });
   ($("#wizardNotes") as HTMLTextAreaElement).value = wizardDrafts[step.field] ?? "";
   $("#wizardCurrent").textContent = card.data[step.field] || "Noch leer";
   ($("#wizardBack") as HTMLButtonElement).disabled = wizardStep === 0;
   $("#wizardNext").textContent = wizardStep === wizardSteps.length - 1 ? "Abschließen →" : "Weiter →";
 }
 
+function wizardNotesForStep() {
+  const step = wizardSteps[wizardStep];
+  const prompts = wizardPrompts[step.field];
+  const details = (wizardDetails[step.field] ?? []).map((value,index) => value.trim() ? prompts[index][0] + ": " + value.trim() : "").filter(Boolean);
+  const free = ($("#wizardNotes") as HTMLTextAreaElement).value.trim();
+  return [...details, free].filter(Boolean).join("\n");
+}
+
 function useWizardNotes() {
   const step = wizardSteps[wizardStep];
-  const notes = ($("#wizardNotes") as HTMLTextAreaElement).value.trim();
+  const notes = wizardNotesForStep();
   wizardDrafts[step.field] = notes;
   if (notes) card.data[step.field] = notes;
   renderAll();
@@ -579,7 +605,7 @@ function useWizardNotes() {
 
 async function expandWizardStep() {
   const step = wizardSteps[wizardStep];
-  const notes = ($("#wizardNotes") as HTMLTextAreaElement).value.trim();
+  const notes = wizardNotesForStep();
   wizardDrafts[step.field] = notes;
   const temp = structuredClone(card);
   if (notes) temp.data[step.field] = notes;
@@ -637,7 +663,7 @@ $("#versionModal").addEventListener("click", event => { if (event.target === $("
 $("#wizardBack").onclick = () => { if (wizardStep > 0) wizardStep--; renderWizard(); };
 $("#wizardNext").onclick = () => {
   const step = wizardSteps[wizardStep];
-  const notes = ($("#wizardNotes") as HTMLTextAreaElement).value.trim();
+  const notes = wizardNotesForStep();
   wizardDrafts[step.field] = notes;
   if (notes && !card.data[step.field]) card.data[step.field] = notes;
   wizardStep++;

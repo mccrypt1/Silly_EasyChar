@@ -2,6 +2,26 @@
 
 All notable changes to Silly EasyChar are documented here. Each release lists English notes first, followed by the German translation.
 
+## v0.2.9
+
+### English
+
+- Moved the guided Character Card wizard into the full-width central workspace and added three structured idea fields to every step.
+- Enlarged the primary card editor and typography for more comfortable long-form editing.
+- Replaced the small sidebar loading indicator with a larger centered progress card while retaining the timer and rotating loading messages.
+- Expanded Lorebook editing with named SillyTavern positions, secondary keys, activation probability, chat depth, selective activation, and recursion controls.
+- Tuned Lorebook generation so Ollama chooses position, order, activation, probability, and recursion settings according to each entry instead of applying generic defaults.
+- Preserved the expanded Lorebook settings in V3 JSON and PNG exports.
+
+### Deutsch
+
+- Der geführte Character-Card-Wizard befindet sich nun in der breiten mittleren Arbeitsfläche und bietet pro Schritt drei strukturierte Ideenfelder.
+- Der zentrale Karteneditor und seine Schrift wurden für längere Texte vergrößert.
+- Die kleine Ladeanzeige in der Seitenleiste wurde durch ein größeres zentriertes Fortschrittsfenster ersetzt; Stoppuhr und wechselnde Ladesprüche bleiben erhalten.
+- Der Lorebook-Editor enthält jetzt benannte SillyTavern-Positionen, Sekundärschlüssel, Aktivierungswahrscheinlichkeit, Chat-Tiefe, selektive Aktivierung und Rekursionssteuerung.
+- Die Lorebook-Generierung wählt Position, Reihenfolge, Aktivierung, Wahrscheinlichkeit und Rekursion nun passend je Eintrag statt mit pauschalen Standardwerten.
+- Die erweiterten Lorebook-Einstellungen bleiben beim V3-JSON- und PNG-Export erhalten.
+
 ## v0.2.8
 
 ### English
