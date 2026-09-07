@@ -577,7 +577,7 @@ async function loadBuildInfo() {
   try {
     const info = await window.__TAURI__?.core.invoke<{ version: string; commit: string }>("build_info");
     if (info) $("#buildInfo").textContent = `v${info.version} · ${info.commit}`;
-  } catch { $("#buildInfo").textContent = "v0.3.4 · development"; }
+  } catch { $("#buildInfo").textContent = "v0.3.5 · development"; }
 }
 function technicalErrorKind(error: unknown): string {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();

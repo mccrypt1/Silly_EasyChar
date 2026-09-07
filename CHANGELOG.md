@@ -2,6 +2,21 @@
 
 All notable changes to Silly EasyChar are documented here. Each release lists English notes first, followed by the German translation.
 
+## v0.3.5
+
+### English
+
+- Reordered both the Character editor and AI field selection to show Alternate Greetings, Message Examples, Creator Notes, System Prompt, and Post-History Instructions in that order.
+- Split Message Examples into independent `<START>` editors and AI selections while preserving the standard combined `mes_example` field in imported and exported character cards.
+- Added an isolated Ollama title suggestion to the greeting-library editor. It receives only the greeting text, describes the scene without source-card references, and is hard-limited to 10 words.
+
+### Deutsch
+
+- Character-Editor und KI-Feldauswahl zeigen nun Alternative Begrüßungen, Dialogbeispiele, Creator Notes, System Prompt und Post-History Instructions in dieser Reihenfolge.
+- Dialogbeispiele werden als unabhängige `<START>`-Editoren und KI-Auswahlen dargestellt; beim Import und Export bleibt das standardkonforme zusammengefasste Feld `mes_example` erhalten.
+- Der Editor der Begrüßungsbibliothek besitzt nun einen isolierten Ollama-Titelvorschlag. An Ollama wird ausschließlich der Begrüßungstext übermittelt; der Titel beschreibt die Szene ohne Rückschluss auf die Quellkarte und ist fest auf zehn Wörter begrenzt.
+
+
 ## v0.3.4
 
 ### English
