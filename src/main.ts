@@ -32,7 +32,7 @@ let selected = new Set<EditableField>(["description", "personality", "scenario",
 let nsfwEnabled = localStorage.getItem("nsfwEnabled") !== "false";
 let optimizeStrength = (localStorage.getItem("optimizeStrength") as "gentle"|"balanced"|"strong") || "balanced";
 let componentSource: CharacterCard | null = null;
-let componentImportMode: "greetings" | "parts" = "parts";
+let componentImportMode: "greetings" | "parts" | "library" = "parts";
 let wizardMode: "new" | "review" | null = null;
 let score: ScoreResult = localScore(card);
 type GreetingLibraryEntry = { id: string; title: string; text: string; createdAt: string };
@@ -127,7 +127,7 @@ app.innerHTML = `
   <div id="greetingLibraryModal" class="modal hidden"><div class="modal-card greeting-library-modal"><div class="field-head"><h3>Alternative-Begrüßungen-Bibliothek</h3><button id="closeGreetingLibrary">×</button></div>
     <p>Diese Bibliothek wird nur lokal auf deinem PC gespeichert. Einträge werden erst nach einem Klick zur geöffneten Karte hinzugefügt.</p>
     <input id="greetingLibrarySearch" placeholder="Bibliothek durchsuchen …" />
-    <div class="greeting-library-create"><input id="greetingLibraryTitle" placeholder="Titel, z. B. Café am Morgen" /><textarea id="greetingLibraryText" rows="5" placeholder="Vollständige alternative Begrüßung …"></textarea><button id="saveGreetingTemplate" class="primary">In Bibliothek speichern</button><button id="captureCardGreetings" class="ghost">Alle Begrüßungen der Karte übernehmen</button></div>
+    <div class="greeting-library-create"><input id="greetingLibraryTitle" placeholder="Titel, z. B. Café am Morgen" /><textarea id="greetingLibraryText" rows="5" placeholder="Vollständige alternative Begrüßung …"></textarea><button id="saveGreetingTemplate" class="primary">In Bibliothek speichern</button><button id="captureCardGreetings" class="ghost">Begrüßungen der aktuellen Karte übernehmen</button><button id="importLibraryGreetings" class="ghost">Aus anderer Karte importieren</button></div>
     <div id="greetingLibraryList" class="greeting-library-list"></div>
   </div></div>
   <div id="reviewModal" class="modal review-modal hidden"><div class="review-card"><div class="field-head"><h3>Änderungen prüfen</h3><button id="closeReview">×</button></div><div class="review-request"><span>DEINE ANWEISUNG</span><p id="reviewRequest"></p></div><div class="review-actions"><button id="acceptAllReview" class="primary">✓ Alle übernehmen</button><button id="rejectReview" class="ghost">✕ Alle ablehnen</button></div><div id="reviewFields"></div><div class="review-footer"><button id="applyReview" class="primary">Ausgewählte Änderungen übernehmen</button></div></div></div>
@@ -160,6 +160,19 @@ function addGreetingFromLibrary(text: string) {
   const index = card.data.alternate_greetings.push(text) - 1;
   selected.add(greetingField(index)); renderExtras(); renderChecks(); changed();
   toast("Begrüßung zur Karte hinzugefügt.");
+}
+function storeCardGreetingsInLibrary(source: CharacterCard): number {
+  const existing = new Set(greetingLibrary.map(entry => entry.text.trim()));
+  let added = 0;
+  source.data.alternate_greetings.forEach((text, index) => {
+    const normalized = normalizePlaceholders(text.trim());
+    if (!normalized || existing.has(normalized)) return;
+    existing.add(normalized);
+    greetingLibrary.unshift(greetingEntry((source.data.name || "Karte") + " · Begrüßung " + (index + 1), normalized));
+    added++;
+  });
+  if (added) saveGreetingLibrary();
+  return added;
 }
 function reconcileSelectedFields() {
   selected = new Set([...selected].filter(key => {
@@ -435,7 +448,7 @@ async function loadBuildInfo() {
   try {
     const info = await window.__TAURI__?.core.invoke<{ version: string; commit: string }>("build_info");
     if (info) $("#buildInfo").textContent = `v${info.version} · ${info.commit}`;
-  } catch { $("#buildInfo").textContent = "v0.3.1 · development"; }
+  } catch { $("#buildInfo").textContent = "v0.3.2 · development"; }
 }
 function technicalErrorKind(error: unknown): string {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
@@ -484,6 +497,13 @@ function showComponentImport(source: CharacterCard) {
 }
 async function handleComponentFile(file: File) {
   const source = await readCardOnly(file);
+  if (componentImportMode === "library") {
+    if (!source.data.alternate_greetings.length) throw new Error("Die gewählte Karte enthält keine alternativen Begrüßungen.");
+    const count = storeCardGreetingsInLibrary(source);
+    renderGreetingLibrary();
+    toast(count ? count + " Begrüßung(en) in die Bibliothek importiert." : "Alle Begrüßungen dieser Karte sind bereits gespeichert.");
+    return;
+  }
   if (componentImportMode === "greetings") {
     if (!source.data.alternate_greetings.length) throw new Error("Die gewählte Karte enthält keine alternativen Begrüßungen.");
     const count = source.data.alternate_greetings.length;
@@ -496,7 +516,7 @@ async function handleComponentFile(file: File) {
   }
   showComponentImport(source);
 }
-function openComponentPicker(mode: "greetings" | "parts") {
+function openComponentPicker(mode: "greetings" | "parts" | "library") {
   componentImportMode = mode;
   const input = $("#componentFileInput") as HTMLInputElement;
   input.value = "";
@@ -645,12 +665,10 @@ $("#saveGreetingTemplate").onclick=()=>{
   toast("Begrüßung lokal gespeichert.");
 };
 $("#captureCardGreetings").onclick=()=>{
-  const existing=new Set(greetingLibrary.map(entry=>entry.text.trim()));
-  const additions=card.data.alternate_greetings.filter(text=>text.trim()&&!existing.has(text.trim()));
-  additions.forEach((text,index)=>greetingLibrary.unshift(greetingEntry((card.data.name||"Karte")+" · Begrüßung "+(index+1),text)));
-  saveGreetingLibrary();renderGreetingLibrary();
-  toast(additions.length?additions.length+" Begrüßung(en) übernommen.":"Alle Begrüßungen sind bereits gespeichert.");
+  const count=storeCardGreetingsInLibrary(card);renderGreetingLibrary();
+  toast(count?count+" Begrüßung(en) übernommen.":"Alle Begrüßungen sind bereits gespeichert.");
 };
+$("#importLibraryGreetings").onclick=()=>openComponentPicker("library");
 $("#addLore").onclick=()=>{if(!card.data.character_book)card.data.character_book={name:`${card.data.name} Lorebook`,entries:[]};const i=card.data.character_book.entries.length;card.data.character_book.entries.push(normalizeLoreEntry({},i));renderLore();changed();};
 [$("#tags"),$("#creator"),$("#version")].forEach(el=>el.addEventListener("input",()=>{card.data.tags=($(`#tags`) as HTMLInputElement).value.split(",").map(x=>x.trim()).filter(Boolean);card.data.creator=($(`#creator`) as HTMLInputElement).value;card.data.character_version=($(`#version`) as HTMLInputElement).value;changed();}));
 document.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(b=>b.onclick=()=>selectTab(b.dataset.tab!));

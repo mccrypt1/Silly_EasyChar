@@ -2,6 +2,19 @@
 
 All notable changes to Silly EasyChar are documented here. Each release lists English notes first, followed by the German translation.
 
+## v0.3.2
+
+### English
+
+- Added direct JSON/PNG character-card import inside the alternate-greeting library.
+- Imported greetings are stored persistently in the offline library, labeled with their source card, and deduplicated without changing the currently open card.
+
+### Deutsch
+
+- Die Bibliothek für alternative Begrüßungen kann Begrüßungen jetzt direkt aus JSON- und PNG-Character-Cards importieren.
+- Importierte Begrüßungen werden dauerhaft offline gespeichert, mit ihrer Quellkarte beschriftet und ohne Duplikate übernommen; die aktuell geöffnete Karte bleibt dabei unverändert.
+
+
 ## v0.3.1
 
 ### English
