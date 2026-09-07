@@ -83,6 +83,41 @@ ${args.text}`;
   return value;
 }
 
+function normalizeGreetingTitle(value: string): string {
+  const title = value.trim().replace(/^["'„“”]+|["'„“”]+$/g, "").replace(/\s+/g, " ");
+  if (!title || title.includes("{{char}}") || title.includes("{{user}}")) {
+    throw new Error("Ollama hat keinen neutralen Titel geliefert.");
+  }
+  return title.split(" ").slice(0, 10).join(" ");
+}
+
+export async function suggestStandaloneGreetingTitle(args: {
+  baseUrl: string; model: string; text: string; language: string;
+}): Promise<string> {
+  if (!args.model) throw new Error("Bitte zuerst ein Ollama-Modell auswählen.");
+  if (!args.text.trim()) throw new Error("Die Begrüßung ist leer.");
+  const system = `You create a neutral library title for one standalone roleplay greeting.
+You receive only the greeting text and no character card metadata. Describe only the scene in at most 10 words. Never use character names, card names, greeting numbers, source references, {{char}}, or {{user}}. Return only strict JSON as {"title":"scene description"}.`;
+  const prompt = `Write the title in ${args.language}. Describe the setting, situation, or central action generically so the source character card cannot be inferred.
+STANDALONE GREETING:
+${args.text}`;
+  const parse = (raw: string) => {
+    const value = extractJson(raw) as unknown as { title?: unknown };
+    if (typeof value.title !== "string") throw new Error("Ollama hat keinen Titel zurückgegeben.");
+    return normalizeGreetingTitle(value.title);
+  };
+  const raw = await chat(args.baseUrl, args.model, system, prompt);
+  try { return parse(raw); }
+  catch {
+    const repaired = await chat(
+      args.baseUrl, args.model,
+      "Return only strict JSON with one string property named title. Preserve the proposed title and do not add details.",
+      raw
+    );
+    return parse(repaired);
+  }
+}
+
 function valueForField(card: CharacterCard, field: EditableField): string {
 
   if (field.startsWith("alternate_greeting:")) return card.data.alternate_greetings[Number(field.split(":")[1])] ?? "";

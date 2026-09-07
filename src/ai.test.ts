@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emptyCard } from "./card";
-import { extractJson, improveStandaloneGreeting, runAi } from "./ai";
+import { extractJson, improveStandaloneGreeting, runAi, suggestStandaloneGreetingTitle } from "./ai";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -136,6 +136,24 @@ describe("Ollama result handling", () => {
     expect(request.prompt).not.toContain("description");
     expect(request.prompt).not.toContain("personality");
     expect(request.prompt).not.toContain("scenario");
+  });
+
+  it("suggests a neutral standalone greeting title with a hard ten-word limit", async () => {
+    const invoke = vi.fn().mockResolvedValue('{"title":"Rainy evening pizza delivery outside a warmly lit apartment doorway together"}');
+    vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });
+    const result = await suggestStandaloneGreetingTitle({
+      baseUrl: "http://127.0.0.1:8787",
+      model: "test",
+      text: "A courier waits outside in the rain with two pizzas.",
+      language: "English"
+    });
+    const request = invoke.mock.calls[0][1] as { prompt: string; system: string };
+    expect(result.split(" ")).toHaveLength(10);
+    expect(request.prompt).toContain("A courier waits outside in the rain with two pizzas.");
+    expect(request.system).toContain("no character card metadata");
+    expect(request.system).toContain("at most 10 words");
+    expect(request.prompt).not.toContain("creator_notes");
+    expect(request.prompt).not.toContain("alternate_greetings");
   });
 });
 

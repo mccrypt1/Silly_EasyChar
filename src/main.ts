@@ -4,7 +4,7 @@ import defaultPortraitUrl from "./assets/default-portrait.jpg?inline";
 import { embedCard, extractCard, imageAsPng } from "./png";
 import { loadDraftPortrait, saveDraftPortrait } from "./draft-image";
 import { formatElapsed, hallucinationDelay, LOADING_HALLUCINATIONS } from "./loading";
-import { improveStandaloneGreeting, models, runAi } from "./ai";
+import { improveStandaloneGreeting, models, runAi, suggestStandaloneGreetingTitle } from "./ai";
 import { emptyDialogueExample, joinDialogueExamples, splitDialogueExamples } from "./dialogue-examples";
 import { CardLibrary } from "./library";
 import { importCardParts, importPartLabels } from "./component-import";
@@ -136,7 +136,7 @@ app.innerHTML = `
   </div></div>
   <div id="reviewModal" class="modal review-modal hidden"><div class="review-card"><div class="field-head"><h3>Änderungen prüfen</h3><button id="closeReview">×</button></div><div class="review-request"><span>DEINE ANWEISUNG</span><p id="reviewRequest"></p></div><div class="review-actions"><button id="acceptAllReview" class="primary">✓ Alle übernehmen</button><button id="rejectReview" class="ghost">✕ Alle ablehnen</button></div><div id="reviewFields"></div><div class="review-footer"><button id="applyReview" class="primary">Ausgewählte Änderungen übernehmen</button></div></div></div>
   <div id="greetingImportModal" class="modal greeting-submodal hidden"><div class="modal-card greeting-import-modal"><div class="field-head"><h3>Begrüßungen zum Import auswählen</h3><button id="closeGreetingImport">×</button></div><p>Wähle nur die Begrüßungen aus, die dauerhaft in die Bibliothek übernommen werden sollen. Die Titel können vor dem Import geändert werden.</p><div id="greetingImportList"></div><div class="modal-actions"><button id="cancelGreetingImport" class="ghost">Abbrechen</button><button id="applyGreetingImport" class="primary">Ausgewählte importieren</button></div></div></div>
-  <div id="greetingEditorModal" class="modal greeting-submodal hidden"><div class="modal-card greeting-entry-editor"><div class="field-head"><h3>Bibliotheksbegrüßung bearbeiten</h3><button id="closeGreetingEditor">×</button></div>
+  <div id="greetingEditorModal" class="modal greeting-submodal hidden"><div class="modal-card greeting-entry-editor"><div class="field-head"><h3>Bibliotheksbegrüßung bearbeiten</h3><div class="greeting-editor-heading-actions"><button id="suggestGreetingTitle" class="greeting-title-suggestion">✦ KI-Titel vorschlagen</button><button id="closeGreetingEditor" class="modal-close">×</button></div></div>
     <label>Titel<input id="greetingEditorTitle" /></label>
     <label>Vollständige Begrüßung<textarea id="greetingEditorText" rows="14"></textarea></label>
     <label>Optionaler Auftrag für Ollama<textarea id="greetingEditorInstruction" rows="3" placeholder="z. B. atmosphärischer, natürlicher und ausführlicher formulieren …"></textarea></label>
@@ -764,6 +764,26 @@ $("#useGreetingEditor").onclick=()=>{
   const text=normalizePlaceholders(($("#greetingEditorText") as HTMLTextAreaElement).value.trim());
   if(!text){toast("Die Begrüßung ist leer.",true);return;}
   addGreetingFromLibrary(text);
+};
+$("#suggestGreetingTitle").onclick=async()=>{
+  const button=$("#suggestGreetingTitle") as HTMLButtonElement;
+  const text=($("#greetingEditorText") as HTMLTextAreaElement).value;
+  if(!text.trim()){toast("Die Begrüßung ist leer.",true);return;}
+  button.disabled=true;
+  const timer=startThinking($("#greetingEditorThinking"),"Ollama beschreibt die Szene in höchstens 10 Wörtern …",true);
+  try{
+    const title=await suggestStandaloneGreetingTitle({
+      baseUrl:($("#ollamaUrl") as HTMLInputElement).value,
+      model:($("#model") as HTMLSelectElement).value,
+      text,
+      language:($("#language") as HTMLSelectElement).value
+    });
+    ($("#greetingEditorTitle") as HTMLInputElement).value=title;
+    toast("Titelvorschlag eingesetzt. Bitte prüfen und speichern.");
+  }catch(error){
+    recordTechnicalError("greeting_library_title",error);
+    toast(error instanceof Error?error.message:String(error),true);
+  }finally{timer.stop();button.disabled=false;}
 };
 $("#improveGreetingEditor").onclick=async()=>{
   const button=$("#improveGreetingEditor") as HTMLButtonElement;
