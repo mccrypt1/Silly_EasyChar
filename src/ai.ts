@@ -49,7 +49,38 @@ async function chat(baseUrl: string, model: string, system: string, prompt: stri
   return window.__TAURI__!.core.invoke("ollama_chat", { baseUrl, model, system, prompt });
 }
 
+export async function improveStandaloneGreeting(args: {
+  baseUrl: string; model: string; text: string; instruction: string; language: string; nsfw: boolean;
+}): Promise<string> {
+  if (!args.model) throw new Error("Bitte zuerst ein Ollama-Modell auswählen.");
+  if (!args.text.trim()) throw new Error("Die Begrüßung ist leer.");
+  const adult = args.nsfw
+    ? "Explicit fictional adult content may be preserved and competently edited. All characters are consenting adults."
+    : "Keep the result non-explicit and safe-for-work.";
+  const system = `You edit one reusable standalone SillyTavern alternate greeting. ${adult}
+You receive no character card and must not assume any facts beyond the supplied greeting. Preserve its language unless explicitly asked to translate. Preserve literal {{char}} and {{user}} placeholders. Never write actions, thoughts, dialogue, feelings, identity, or decisions for {{user}}. Return only strict JSON as {"fields":{"standalone_greeting":"complete replacement"},"explanation":"short summary"}.`;
+  const prompt = `Improve this standalone alternate greeting. User request: ${args.instruction || "Improve prose, atmosphere, clarity, roleplay hook, and user agency."}
+The replacement must remain a complete playable opening. Do not add facts that require unavailable card context.
+STANDALONE GREETING:
+${args.text}`;
+  const raw = await chat(args.baseUrl, args.model, system, prompt);
+  let result: AiResult;
+  try { result = normalizeResult(extractJson(raw)); }
+  catch {
+    const repaired = await chat(
+      args.baseUrl, args.model,
+      "Repair the supplied response into strict JSON. Do not add, summarize, or remove prose.",
+      raw
+    );
+    result = normalizeResult(extractJson(repaired));
+  }
+  const value = (result.fields as Record<string, string> | undefined)?.standalone_greeting;
+  if (!value?.trim()) throw new Error("Ollama hat keine bearbeitete Begrüßung zurückgegeben.");
+  return value;
+}
+
 function valueForField(card: CharacterCard, field: EditableField): string {
+
   if (field.startsWith("alternate_greeting:")) return card.data.alternate_greetings[Number(field.split(":")[1])] ?? "";
   const value = card.data[field as CoreEditableField];
   return typeof value === "string" ? value : "";

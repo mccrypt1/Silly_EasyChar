@@ -2,6 +2,25 @@
 
 All notable changes to Silly EasyChar are documented here. Each release lists English notes first, followed by the German translation.
 
+## v0.3.3
+
+### English
+
+- Added a confirmation screen for card-to-library greeting imports so individual greetings can be selected and titled before import.
+- Stopped using source character names as automatically imported greeting titles.
+- Added a full library-entry editor for reading and changing both title and greeting text.
+- Added actions in the entry editor to save, delete, or add the currently edited greeting to the open card.
+- Added isolated Ollama improvement for library greetings; only the selected greeting and its local instruction are sent, with no character-card context.
+
+### Deutsch
+
+- Beim Kartenimport in die Begrüßungsbibliothek erscheint nun eine Auswahl, in der einzelne Begrüßungen bestätigt und vor dem Import benannt werden können.
+- Namen der Quellcharaktere werden nicht mehr automatisch als Begrüßungstitel übernommen.
+- Bibliothekseinträge lassen sich in einer vollständigen Ansicht lesen sowie in Titel und Text bearbeiten.
+- Im Editor kann die bearbeitete Begrüßung gespeichert, gelöscht oder zur geöffneten Karte hinzugefügt werden.
+- Die Ollama-Verbesserung für Bibliotheksbegrüßungen arbeitet isoliert: Übermittelt werden ausschließlich die gewählte Begrüßung und ihre lokale Anweisung, keinerlei Character-Card-Kontext.
+
+
 ## v0.3.2
 
 ### English

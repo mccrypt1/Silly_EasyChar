@@ -4,7 +4,7 @@ import defaultPortraitUrl from "./assets/default-portrait.jpg?inline";
 import { embedCard, extractCard, imageAsPng } from "./png";
 import { loadDraftPortrait, saveDraftPortrait } from "./draft-image";
 import { formatElapsed, hallucinationDelay, LOADING_HALLUCINATIONS } from "./loading";
-import { models, runAi } from "./ai";
+import { improveStandaloneGreeting, models, runAi } from "./ai";
 import { CardLibrary } from "./library";
 import { importCardParts, importPartLabels } from "./component-import";
 import type { ImportPart } from "./component-import";
@@ -37,6 +37,8 @@ let wizardMode: "new" | "review" | null = null;
 let score: ScoreResult = localScore(card);
 type GreetingLibraryEntry = { id: string; title: string; text: string; createdAt: string };
 let greetingLibrary: GreetingLibraryEntry[] = loadGreetingLibrary();
+let pendingGreetingImports: { title: string; text: string; selected: boolean }[] = [];
+let editingGreetingId: string | null = null;
 let aiBusy = false;
 let statusTimer = 0;
 let linkedPath: string | null = null;
@@ -131,6 +133,15 @@ app.innerHTML = `
     <div id="greetingLibraryList" class="greeting-library-list"></div>
   </div></div>
   <div id="reviewModal" class="modal review-modal hidden"><div class="review-card"><div class="field-head"><h3>Änderungen prüfen</h3><button id="closeReview">×</button></div><div class="review-request"><span>DEINE ANWEISUNG</span><p id="reviewRequest"></p></div><div class="review-actions"><button id="acceptAllReview" class="primary">✓ Alle übernehmen</button><button id="rejectReview" class="ghost">✕ Alle ablehnen</button></div><div id="reviewFields"></div><div class="review-footer"><button id="applyReview" class="primary">Ausgewählte Änderungen übernehmen</button></div></div></div>
+  <div id="greetingImportModal" class="modal greeting-submodal hidden"><div class="modal-card greeting-import-modal"><div class="field-head"><h3>Begrüßungen zum Import auswählen</h3><button id="closeGreetingImport">×</button></div><p>Wähle nur die Begrüßungen aus, die dauerhaft in die Bibliothek übernommen werden sollen. Die Titel können vor dem Import geändert werden.</p><div id="greetingImportList"></div><div class="modal-actions"><button id="cancelGreetingImport" class="ghost">Abbrechen</button><button id="applyGreetingImport" class="primary">Ausgewählte importieren</button></div></div></div>
+  <div id="greetingEditorModal" class="modal greeting-submodal hidden"><div class="modal-card greeting-entry-editor"><div class="field-head"><h3>Bibliotheksbegrüßung bearbeiten</h3><button id="closeGreetingEditor">×</button></div>
+    <label>Titel<input id="greetingEditorTitle" /></label>
+    <label>Vollständige Begrüßung<textarea id="greetingEditorText" rows="14"></textarea></label>
+    <label>Optionaler Auftrag für Ollama<textarea id="greetingEditorInstruction" rows="3" placeholder="z. B. atmosphärischer, natürlicher und ausführlicher formulieren …"></textarea></label>
+    <p class="privacy-note">Ollama erhält hierbei ausschließlich diese Begrüßung und den Auftrag – keine Daten der aktuell geöffneten Karte.</p>
+    <div class="modal-actions"><button id="deleteGreetingEditor" class="danger-button">Löschen</button><button id="useGreetingEditor" class="ghost">Zur Karte hinzufügen</button><button id="improveGreetingEditor" class="ghost">✦ Isoliert mit Ollama verbessern</button><button id="saveGreetingEditor" class="primary">Änderungen speichern</button></div>
+    <div id="greetingEditorThinking" class="hidden"></div>
+  </div></div>
   <div id="cropModal" class="modal crop-modal hidden"><div class="crop-card"><div class="field-head"><h3>Portrait zuschneiden</h3><button id="closeCrop">×</button></div><p>Bild verschieben und mit dem Regler zoomen. Der Export wird als 4:5-PNG mit 768 × 960 Pixeln gespeichert.</p><canvas id="cropCanvas" width="768" height="960"></canvas><label>Zoom<input id="cropZoom" type="range" min="1" max="3" step="0.01" value="1" /></label><div class="crop-actions"><button id="cropOriginal" class="ghost">Original verwenden</button><button id="applyCrop" class="primary">Zuschnitt übernehmen</button></div></div></div>
   <div id="toast"></div><input id="fileInput" type="file" accept=".json,.png,application/json,image/png" hidden /><input id="componentFileInput" type="file" accept=".json,.png,application/json,image/png" hidden />`;
 
@@ -168,7 +179,7 @@ function storeCardGreetingsInLibrary(source: CharacterCard): number {
     const normalized = normalizePlaceholders(text.trim());
     if (!normalized || existing.has(normalized)) return;
     existing.add(normalized);
-    greetingLibrary.unshift(greetingEntry((source.data.name || "Karte") + " · Begrüßung " + (index + 1), normalized));
+    greetingLibrary.unshift(greetingEntry("Alternative Begrüßung " + (index + 1), normalized));
     added++;
   });
   if (added) saveGreetingLibrary();
@@ -248,7 +259,7 @@ function renderExtras() {
 function renderGreetingLibrary() {
   const query = ($("#greetingLibrarySearch") as HTMLInputElement).value.trim().toLocaleLowerCase();
   const visible = greetingLibrary.filter(entry => !query || (entry.title + "\n" + entry.text).toLocaleLowerCase().includes(query));
-  $("#greetingLibraryList").innerHTML = visible.map(entry => `<article class="greeting-library-item"><div><b>${escapeHtml(entry.title)}</b><small>${escapeHtml(entry.text)}</small></div><button class="primary" data-use-greeting="${escapeAttr(entry.id)}">Zur Karte</button><button class="danger-link" data-delete-greeting="${escapeAttr(entry.id)}">Löschen</button></article>`).join("") || `<p class="muted">Keine passenden Begrüßungen gespeichert.</p>`;
+  $("#greetingLibraryList").innerHTML = visible.map(entry => `<article class="greeting-library-item"><div class="greeting-library-summary" data-edit-greeting="${escapeAttr(entry.id)}" title="Zum vollständigen Lesen und Bearbeiten öffnen"><b>${escapeHtml(entry.title)}</b><small>${escapeHtml(entry.text)}</small></div><button class="primary" data-use-greeting="${escapeAttr(entry.id)}">Zur Karte</button><button class="danger-link" data-delete-greeting="${escapeAttr(entry.id)}">Löschen</button></article>`).join("") || `<p class="muted">Keine passenden Begrüßungen gespeichert.</p>`;
   document.querySelectorAll<HTMLButtonElement>("[data-use-greeting]").forEach(button => button.onclick = () => {
     const entry = greetingLibrary.find(item => item.id === button.dataset.useGreeting);
     if (entry) addGreetingFromLibrary(entry.text);
@@ -256,6 +267,10 @@ function renderGreetingLibrary() {
   document.querySelectorAll<HTMLButtonElement>("[data-delete-greeting]").forEach(button => button.onclick = () => {
     greetingLibrary = greetingLibrary.filter(item => item.id !== button.dataset.deleteGreeting);
     saveGreetingLibrary(); renderGreetingLibrary();
+  });
+  document.querySelectorAll<HTMLElement>("[data-edit-greeting]").forEach(element => element.onclick = () => {
+    const entry = greetingLibrary.find(item => item.id === element.dataset.editGreeting);
+    if (entry) openGreetingEditor(entry.id);
   });
 }
 function openGreetingLibrary() {
@@ -266,6 +281,52 @@ function openGreetingLibrary() {
   $("#greetingLibraryModal").classList.remove("hidden");
 }
 function closeGreetingLibrary() { $("#greetingLibraryModal").classList.add("hidden"); }
+
+function renderGreetingImportSelection() {
+  $("#greetingImportList").innerHTML = pendingGreetingImports.map((entry, index) => `<article class="greeting-import-item"><label class="check"><input type="checkbox" data-greeting-import-check="${index}" ${entry.selected ? "checked" : ""}/><span>Importieren</span></label><input data-greeting-import-title="${index}" value="${escapeAttr(entry.title)}" aria-label="Titel der Begrüßung" /><details><summary>Vollständige Begrüßung lesen</summary><p>${escapeHtml(entry.text)}</p></details></article>`).join("");
+  document.querySelectorAll<HTMLInputElement>("[data-greeting-import-check]").forEach(input => input.onchange = () => pendingGreetingImports[Number(input.dataset.greetingImportCheck)].selected = input.checked);
+  document.querySelectorAll<HTMLInputElement>("[data-greeting-import-title]").forEach(input => input.oninput = () => pendingGreetingImports[Number(input.dataset.greetingImportTitle)].title = input.value);
+}
+function openGreetingImportSelection(source: CharacterCard) {
+  pendingGreetingImports = source.data.alternate_greetings.map((text, index) => ({
+    title: "Alternative Begrüßung " + (index + 1),
+    text: normalizePlaceholders(text.trim()),
+    selected: true
+  })).filter(entry => entry.text);
+  renderGreetingImportSelection();
+  $("#greetingImportModal").classList.remove("hidden");
+}
+function closeGreetingImport() {
+  $("#greetingImportModal").classList.add("hidden");
+  pendingGreetingImports = [];
+}
+function applyGreetingImportSelection() {
+  const existing = new Set(greetingLibrary.map(entry => entry.text.trim()));
+  let added = 0;
+  for (const entry of pendingGreetingImports.filter(item => item.selected)) {
+    if (existing.has(entry.text)) continue;
+    existing.add(entry.text);
+    greetingLibrary.unshift(greetingEntry(entry.title, entry.text));
+    added++;
+  }
+  if (added) saveGreetingLibrary();
+  closeGreetingImport();
+  renderGreetingLibrary();
+  toast(added ? added + " ausgewählte Begrüßung(en) importiert." : "Keine neue Begrüßung importiert.");
+}
+function openGreetingEditor(id: string) {
+  const entry = greetingLibrary.find(item => item.id === id);
+  if (!entry) return;
+  editingGreetingId = id;
+  ($("#greetingEditorTitle") as HTMLInputElement).value = entry.title;
+  ($("#greetingEditorText") as HTMLTextAreaElement).value = entry.text;
+  ($("#greetingEditorInstruction") as HTMLTextAreaElement).value = "";
+  $("#greetingEditorModal").classList.remove("hidden");
+}
+function closeGreetingEditor() {
+  $("#greetingEditorModal").classList.add("hidden");
+  editingGreetingId = null;
+}
 
 function renderLore() {
   const entries = card.data.character_book?.entries ?? [];
@@ -448,7 +509,7 @@ async function loadBuildInfo() {
   try {
     const info = await window.__TAURI__?.core.invoke<{ version: string; commit: string }>("build_info");
     if (info) $("#buildInfo").textContent = `v${info.version} · ${info.commit}`;
-  } catch { $("#buildInfo").textContent = "v0.3.2 · development"; }
+  } catch { $("#buildInfo").textContent = "v0.3.3 · development"; }
 }
 function technicalErrorKind(error: unknown): string {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
@@ -499,9 +560,7 @@ async function handleComponentFile(file: File) {
   const source = await readCardOnly(file);
   if (componentImportMode === "library") {
     if (!source.data.alternate_greetings.length) throw new Error("Die gewählte Karte enthält keine alternativen Begrüßungen.");
-    const count = storeCardGreetingsInLibrary(source);
-    renderGreetingLibrary();
-    toast(count ? count + " Begrüßung(en) in die Bibliothek importiert." : "Alle Begrüßungen dieser Karte sind bereits gespeichert.");
+    openGreetingImportSelection(source);
     return;
   }
   if (componentImportMode === "greetings") {
@@ -609,6 +668,52 @@ function applyAiResult(r: AiResult, action: string, allowedFields = selected) {
   const items=r.suggestions?.map(x=>`<li>${escapeHtml(x)}</li>`).join("")||"";
   $("#aiOutput").innerHTML=`<div class="result"><b>✓ ${action==="grade"?"Bewertung abgeschlossen":"Ergebnis übernommen"}</b>${r.explanation?`<p>${escapeHtml(r.explanation)}</p>`:""}${items?`<ol>${items}</ol>`:""}${r.score?`<p class="big-result">${r.score.total}<small>/100</small></p>`:""}${r.lorebook?`<p>${Object.keys(r.lorebook.entries).length} Lorebook-Einträge erstellt.</p>`:""}</div>`;
 }
+$("#closeGreetingImport").onclick=closeGreetingImport;
+$("#cancelGreetingImport").onclick=closeGreetingImport;
+$("#greetingImportModal").addEventListener("click",event=>{if(event.target===$("#greetingImportModal"))closeGreetingImport();});
+$("#applyGreetingImport").onclick=applyGreetingImportSelection;
+$("#closeGreetingEditor").onclick=closeGreetingEditor;
+$("#greetingEditorModal").addEventListener("click",event=>{if(event.target===$("#greetingEditorModal"))closeGreetingEditor();});
+$("#saveGreetingEditor").onclick=()=>{
+  const entry=greetingLibrary.find(item=>item.id===editingGreetingId);
+  const text=normalizePlaceholders(($("#greetingEditorText") as HTMLTextAreaElement).value.trim());
+  if(!entry||!text){toast("Die Begrüßung darf nicht leer sein.",true);return;}
+  entry.title=($("#greetingEditorTitle") as HTMLInputElement).value.trim()||"Unbenannte Begrüßung";
+  entry.text=text;
+  saveGreetingLibrary();renderGreetingLibrary();closeGreetingEditor();toast("Bibliothekseintrag gespeichert.");
+};
+$("#deleteGreetingEditor").onclick=()=>{
+  if(!editingGreetingId||!confirm("Diesen Bibliothekseintrag löschen?"))return;
+  greetingLibrary=greetingLibrary.filter(item=>item.id!==editingGreetingId);
+  saveGreetingLibrary();renderGreetingLibrary();closeGreetingEditor();toast("Bibliothekseintrag gelöscht.");
+};
+$("#useGreetingEditor").onclick=()=>{
+  const text=normalizePlaceholders(($("#greetingEditorText") as HTMLTextAreaElement).value.trim());
+  if(!text){toast("Die Begrüßung ist leer.",true);return;}
+  addGreetingFromLibrary(text);
+};
+$("#improveGreetingEditor").onclick=async()=>{
+  const button=$("#improveGreetingEditor") as HTMLButtonElement;
+  const text=($("#greetingEditorText") as HTMLTextAreaElement).value;
+  if(!text.trim()){toast("Die Begrüßung ist leer.",true);return;}
+  button.disabled=true;
+  const timer=startThinking($("#greetingEditorThinking"),"Ollama verbessert nur diese Begrüßung …",true);
+  try{
+    const improved=await improveStandaloneGreeting({
+      baseUrl:($("#ollamaUrl") as HTMLInputElement).value,
+      model:($("#model") as HTMLSelectElement).value,
+      text,
+      instruction:($("#greetingEditorInstruction") as HTMLTextAreaElement).value,
+      language:($("#language") as HTMLSelectElement).value,
+      nsfw:nsfwEnabled
+    });
+    ($("#greetingEditorText") as HTMLTextAreaElement).value=improved;
+    toast("Vorschlag eingesetzt. Bitte prüfen und speichern.");
+  }catch(error){
+    recordTechnicalError("greeting_library_improve",error);
+    toast(error instanceof Error?error.message:String(error),true);
+  }finally{timer.stop();button.disabled=false;}
+};
 
 $("#newBtn").onclick=()=>{if(!confirm("Aktuelle Karte durch eine neue ersetzen? Der letzte Stand bleibt nur im lokalen Entwurf."))return; card=newCardWithDefaults();clearPortrait();linkedPath=null;linkedFormat=null;resetWizardState();resetAiInstruction();score=localScore(card);renderAll();syncLinkedButtons();changed();};
 $("#importBtn").onclick=()=>$("#fileInput").click(); $("#fileInput").onchange=async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(f)try{linkedPath=null;linkedFormat=null;await importFile(f);syncLinkedButtons();}catch(err){toast(err instanceof Error?err.message:String(err),true);}};

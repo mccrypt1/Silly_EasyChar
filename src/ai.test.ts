@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emptyCard } from "./card";
-import { extractJson, runAi } from "./ai";
+import { extractJson, improveStandaloneGreeting, runAi } from "./ai";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -97,6 +97,28 @@ describe("Ollama result handling", () => {
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(result.fields?.system_prompt).toBe(compact);
     expect((result.fields?.system_prompt ?? "").length).toBeLessThanOrEqual(650);
+  });
+
+  it("improves a library greeting without receiving character-card context", async () => {
+    const improved = "A complete opening for {{user}}.";
+    const invoke = vi.fn().mockResolvedValue(JSON.stringify({ fields: { standalone_greeting: improved } }));
+    vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });
+    const result = await improveStandaloneGreeting({
+      baseUrl: "http://127.0.0.1:8787",
+      model: "test",
+      text: "Hello {{user}}.",
+      instruction: "Make it atmospheric",
+      language: "Deutsch",
+      nsfw: true
+    });
+    const request = invoke.mock.calls[0][1] as { prompt: string; system: string };
+    expect(result).toBe(improved);
+    expect(request.prompt).toContain("Hello {{user}}.");
+    expect(request.prompt).toContain("Make it atmospheric");
+    expect(request.system).toContain("receive no character card");
+    expect(request.prompt).not.toContain("description");
+    expect(request.prompt).not.toContain("personality");
+    expect(request.prompt).not.toContain("scenario");
   });
 });
 
