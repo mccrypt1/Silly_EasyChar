@@ -70,6 +70,7 @@ function focusedPayload(card: CharacterCard, selected: EditableField[], action: 
 export async function runAi(args: {
   baseUrl: string; model: string; action: "edit" | "translate" | "suggest" | "grade" | "lorebook" | "optimize";
   card: CharacterCard; selected: EditableField[]; instruction: string; language: string; nsfw: boolean;
+  optimizationStrength?: "gentle" | "balanced" | "strong";
 }): Promise<AiResult> {
   if (!args.model) throw new Error("Bitte zuerst ein Ollama-Modell auswählen.");
   const adult = args.nsfw
@@ -82,16 +83,24 @@ Return ONLY strict, parseable JSON with double-quoted property names and escaped
   const selected = args.selected.map(f => `${f} (${fieldLabel(f)})`).join(", ");
   const payload = focusedPayload(args.card, args.selected, args.action);
   let task = "";
+  const optimizationProfiles = {
+    gentle: "Description: at most about 180 tokens in 4–8 sentences. Personality: 8–12 concise bullets. Scenario: 2–3 sentences. Message Examples: at most 2–3 short blocks. System Prompt: 60–100 tokens in 2–6 rules.",
+    balanced: "Description: at most about 120 tokens in 3–6 sentences. Personality: 5–10 concise bullets. Scenario: 1–2 sentences. Message Examples: at most 1–2 short blocks. System Prompt: 40–80 tokens in 2–6 rules.",
+    strong: "Description: at most about 80 tokens in 2–4 sentences. Personality: 4–7 terse bullets. Scenario: exactly 1 concise sentence. Message Examples: exactly 1 short block. System Prompt: 30–50 tokens in 2–4 rules."
+  };
+  const optimizationProfile = optimizationProfiles[args.optimizationStrength ?? "balanced"];
   if (args.action === "translate") task = `Translate ONLY these fields to ${args.language}: ${selected}. Preserve placeholders, markdown, line breaks, names, and meaning. Return {"fields":{"field":"translation"},"explanation":"short summary in ${args.language}"}.`;
   if (args.action === "edit") task = `Edit ONLY these fields: ${selected}. User request: ${args.instruction || "Improve quality, clarity, consistency, and roleplay utility."}
 Create substantially expanded, complete replacements in one pass instead of merely appending a few sentences. Unless the user requests brevity, aim for roughly 500–1200 characters each for description/personality/scenario, 600–1600 for first_mes, and 3–5 varied exchanges for mes_example. Keep the name concise. Use all useful facts already present, add fitting detail without contradictions, and distribute information into its semantically correct field; never stuff personality, scenario, examples, or instructions into description.
 Preserve the existing language of each non-empty source field. The configured output language applies only to explanations and newly created empty fields. Never translate an edited field unless the user explicitly requests translation.
 For alternate greetings, return each exact dynamic key such as "alternate_greeting:0" separately. Each alternate greeting must be a complete 600–1600 character roleplay opening with atmosphere, visible action, a distinct situation, a clear conversation hook, and at least one natural {{user}} reference; never decide {{user}}'s response or actions. Return {"fields":{"field":"complete replacement"},"explanation":"short summary in ${args.language}"}.`;
   if (args.action === "edit" && args.selected.includes("mes_example")) task += ` Every separate dialogue example must begin with <START> on its own line, followed by at least one {{user}}: message and one {{char}}: message. Use the literal prefixes exactly, create 3–5 separate <START> blocks, and demonstrate the character voice, mannerisms, actions, and emotional range. Never use User:, Char:, character names, or one continuous block as speaker prefixes.`;
-  if (args.action === "optimize") task = `Rewrite ONLY these fields to reduce prompt-token usage without losing identity, essential facts, continuity, voice, user agency, placeholders, or roleplay utility: ${selected}. Return {"fields":{"field":"complete compact replacement"},"explanation":"short summary in ${args.language}"}. Apply field-specific targets: Description should be 3–6 information-dense sentences without redundant lore; Personality should be 5–10 concise bullets without synonym repetition; Scenario should be 1–2 sentences defining only the starting situation; Message Examples should contain only 1–2 short <START> blocks using literal {{user}}: and {{char}}: prefixes; System Prompt should contain only unique behavioral rules and no repeated character traits or jailbreak wall; Post-History Instructions should be one short reinforcement or an empty string when redundant; First Message and alternate greetings should stay playable but remove repeated exposition and decorative padding. Do not translate. Do not invent new facts. Prefer removing duplication over removing unique information.`;
+  if (args.action === "edit" && args.selected.includes("system_prompt")) task += ` SYSTEM PROMPT HARD LIMIT: 2–6 short non-negotiable behavioral or formatting rules, approximately 30–100 tokens and never more than 650 characters. Do not place character facts, lore, voice, ordinary style guidance, examples, or jailbreak walls here. Return an empty string if no system-level rule is needed.`;
+  if (args.action === "edit" && args.selected.includes("post_history_instructions")) task += ` POST-HISTORY HARD LIMIT: one concise reinforcement, never more than 350 characters; return an empty string if redundant.`;
+  if (args.action === "optimize") task = `Rewrite ONLY these fields to reduce prompt-token usage without losing identity, essential facts, continuity, voice, user agency, placeholders, or roleplay utility: ${selected}. Return {"fields":{"field":"complete compact replacement"},"explanation":"short summary in ${args.language}"}. Strength profile: ${optimizationProfile} Personality must use compact bullets without synonym repetition. Scenario contains only the starting situation. Message Examples use literal {{user}}: and {{char}}: prefixes. System Prompt contains only unique, non-negotiable rules; style guidance does not belong there. Post-History Instructions are one short reinforcement or an empty string when redundant. First Message and alternate greetings stay playable but lose repeated exposition and decorative padding. Do not translate. Do not invent new facts. Prefer removing duplication over removing unique information.`;
   if (args.action === "suggest") task = `Review the card and return 3–7 concrete improvements as {"suggestions":["..."],"explanation":"..."} in ${args.language}. Do not rewrite fields.`;
   if (args.action === "grade") task = `Grade the card out of 100. Return {"score":{"total":0,"structure":0,"coherence":0,"roleplay":0,"creativity":0,"polish":0,"findings":["specific actionable improvement", "..."]}}. Each subscore is 0–20 and must sum to total. Findings must be concrete editing instructions in ${args.language}, ready to paste into an editing request. Check correct field placement, placeholders, depth, consistency, user agency, and dialogue examples especially carefully.`;
-  if (args.action === "lorebook") task = `Create a production-ready SillyTavern lorebook from the card and this request: ${args.instruction || "Extract important characters, locations, items, factions and rules."} Return {"lorebook":{"entries":{"0":{...}}}}. Each entry MUST contain uid,key,keysecondary,comment,content,constant,selective,selectiveLogic,addMemo,order,position,disable,probability,useProbability,depth,delay,cooldown,sticky,vectorized,ignoreBudget,excludeRecursion,preventRecursion. Use string keys matching uid. Every content block must be concise, standalone and contain only information that should enter the prompt; do not repeat ordinary card fields. Split unrelated concepts. Choose settings per entry: position 0 for general world facts before the character definition, position 1 for character-specific lore after it, positions 5 or 6 only for genuine example-message material, and position 4 only for a deliberately persistent in-chat instruction. Higher order means closer to the end of context and more influence. Use constant true only for essential information that must always load; otherwise provide specific primary trigger keys. Use secondary keys with selective true only to disambiguate broad primary keys. Probability should normally be 100 and lower only for intentionally random content. Depth matters only at position 4. Prevent or exclude recursion only when activation chains would be noisy or unsafe. Set vectorized false and useProbability true. Output language: ${args.language}.`;
+  if (args.action === "lorebook") task = `Create a production-ready SillyTavern lorebook from the card and this request: ${args.instruction || "Extract important characters, locations, items, factions and rules."} Return {"lorebook":{"entries":{"0":{...}}}}. Each entry MUST contain uid,key,keysecondary,comment,content,constant,selective,selectiveLogic,addMemo,order,position,disable,probability,useProbability,depth,delay,cooldown,sticky,vectorized,ignoreBudget,excludeRecursion,preventRecursion. Use string keys matching uid. Every content block must be concise, standalone, normally 1–3 sentences or roughly 20–60 tokens, and contain only information that should enter the prompt; do not repeat ordinary card fields. Split unrelated concepts. Choose settings per entry: position 0 for general world facts before the character definition, position 1 for character-specific lore after it, positions 5 or 6 only for genuine example-message material, and position 4 only for a deliberately persistent in-chat instruction. Higher order means closer to the end of context and more influence. Use constant true only for essential information that must always load; otherwise provide specific primary trigger keys. Use secondary keys with selective true only to disambiguate broad primary keys. Probability should normally be 100 and lower only for intentionally random content. Depth matters only at position 4. Prevent or exclude recursion only when activation chains would be noisy or unsafe. Set vectorized false and useProbability true. Output language: ${args.language}.`;
   const text = await chat(args.baseUrl, args.model, common, `${task}\n\nCARD DATA:\n${payload}`);
   let result: AiResult;
   try {
@@ -131,6 +140,28 @@ For alternate greetings, return each exact dynamic key such as "alternate_greeti
         result.fields = { ...result.fields, ...expanded.fields };
         result.explanation = expanded.explanation ?? result.explanation;
       } catch { /* Keep the valid first result if the depth retry fails. */ }
+    }
+  }
+  if (args.action === "edit") {
+    const oversized = args.selected.filter(field => {
+      const value = result.fields?.[field] ?? "";
+      return (field === "system_prompt" && value.length > 650) || (field === "post_history_instructions" && value.length > 350);
+    });
+    if (oversized.length) {
+      const retry = await chat(
+        args.baseUrl, args.model, common,
+        `The previous response violated a hard length limit. Rewrite ONLY: ${oversized.join(", ")}. System Prompt must contain only 2–6 indispensable rules, about 30–100 tokens and at most 650 characters. Post-History Instructions must be at most 350 characters. Remove lore, character facts, examples, repeated style guidance, and jailbreak walls. Return strict JSON as {"fields":{"exact_key":"compact replacement"},"explanation":"..."}. PREVIOUS RESULT: ${JSON.stringify(result)}`
+      );
+      const compact = normalizeResult(extractJson(retry));
+      for (const field of oversized) {
+        const value = compact.fields?.[field];
+        const limit = field === "system_prompt" ? 650 : 350;
+        if (typeof value !== "string" || value.length > limit) {
+          throw new Error("Das Modell hat die feste Längengrenze für " + fieldLabel(field) + " zweimal überschritten.");
+        }
+        result.fields ??= {};
+        result.fields[field] = value;
+      }
     }
   }
   return result;

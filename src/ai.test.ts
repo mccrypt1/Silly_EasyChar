@@ -74,12 +74,29 @@ describe("Ollama result handling", () => {
     card.data.post_history_instructions = "PRIVATE_LARGE_UNUSED_FIELD";
     await runAi({
       baseUrl: "http://127.0.0.1:8787", model: "test", action: "optimize",
-      card, selected: ["scenario"], instruction: "", language: "Deutsch", nsfw: true
+      card, selected: ["scenario"], instruction: "", language: "Deutsch", nsfw: true,
+      optimizationStrength: "strong"
     });
     const request = invoke.mock.calls[0][1] as { prompt: string };
-    expect(request.prompt).toContain("Scenario should be 1–2 sentences");
+    expect(request.prompt).toContain("Scenario: exactly 1 concise sentence");
     expect(request.prompt).toContain("Original scenario");
     expect(request.prompt).not.toContain("PRIVATE_LARGE_UNUSED_FIELD");
+  });
+
+  it("retries an oversized system prompt and only returns a compact replacement", async () => {
+    const oversized = "Keep every rule. ".repeat(80);
+    const compact = "Stay in character. Never speak or decide for {{user}}. Keep narration consistent.";
+    const invoke = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify({ fields: { system_prompt: oversized } }))
+      .mockResolvedValueOnce(JSON.stringify({ fields: { system_prompt: compact } }));
+    vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });
+    const result = await runAi({
+      baseUrl: "http://127.0.0.1:8787", model: "test", action: "edit", card: emptyCard(),
+      selected: ["system_prompt"], instruction: "Improve it", language: "Deutsch", nsfw: true
+    });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result.fields?.system_prompt).toBe(compact);
+    expect((result.fields?.system_prompt ?? "").length).toBeLessThanOrEqual(650);
   });
 });
 

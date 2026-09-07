@@ -6,6 +6,8 @@ import { loadDraftPortrait, saveDraftPortrait } from "./draft-image";
 import { formatElapsed, hallucinationDelay, LOADING_HALLUCINATIONS } from "./loading";
 import { models, runAi } from "./ai";
 import { CardLibrary } from "./library";
+import { importCardParts, importPartLabels } from "./component-import";
+import type { ImportPart } from "./component-import";
 import type { LibraryEntry } from "./library";
 import type { AiResult, CharacterCard, CoreEditableField, EditableField, ScoreResult } from "./types";
 
@@ -28,7 +30,13 @@ let imageUrl = "";
 let activeField: CoreEditableField = "description";
 let selected = new Set<EditableField>(["description", "personality", "scenario", "first_mes"]);
 let nsfwEnabled = localStorage.getItem("nsfwEnabled") !== "false";
+let optimizeStrength = (localStorage.getItem("optimizeStrength") as "gentle"|"balanced"|"strong") || "balanced";
+let componentSource: CharacterCard | null = null;
+let componentImportMode: "greetings" | "parts" = "parts";
+let wizardMode: "new" | "review" | null = null;
 let score: ScoreResult = localScore(card);
+type GreetingLibraryEntry = { id: string; title: string; text: string; createdAt: string };
+let greetingLibrary: GreetingLibraryEntry[] = loadGreetingLibrary();
 let aiBusy = false;
 let statusTimer = 0;
 let linkedPath: string | null = null;
@@ -47,7 +55,7 @@ app.innerHTML = `
   <header class="topbar">
     <div class="brand"><div class="brand-mark">S</div><div class="brand-copy"><strong>Silly EasyChar</strong><small>Offline Character Studio</small><span id="buildInfo" class="build-info">v… · …</span></div><button id="settingsBtn" class="settings-button" title="Einstellungen öffnen" aria-label="Einstellungen">⚙</button><button id="repoLink" class="brand-watermark" title="Silly EasyChar auf GitHub öffnen">mccrypt1</button></div>
     <div class="top-actions">
-      <button id="newBtn" class="ghost">＋ Neu</button><button id="importBtn" class="ghost">↥ Import</button>
+      <button id="newBtn" class="ghost">＋ Neu</button><button id="importBtn" class="ghost">↥ Import</button><button id="partsImportBtn" class="ghost">Teile importieren</button>
       <button id="saveLinkedBtn" class="primary hidden">In SillyTavern speichern</button><button id="addFolderBtn" class="ghost hidden">Zum ST-Ordner</button>
       <button id="versionsBtn" class="ghost hidden">Versionen</button><button id="jsonBtn" class="ghost">JSON exportieren</button>
       <button id="pngBtn" class="primary">PNG exportieren</button>
@@ -73,7 +81,7 @@ app.innerHTML = `
     <section class="editor-panel">
       <nav class="tabs"><button data-tab="fields" class="active">Charakter</button><button data-tab="wizard">Wizard</button><button data-tab="extras">Extras</button><button data-tab="lore">Lorebook</button><span id="saveState">Lokal gespeichert</span></nav>
       <div id="tab-fields" class="tab-page active"><div id="fields" class="fields"></div>
-        <section class="field greeting-editor" style="max-width:900px;margin:0 auto 13px"><div class="field-head"><label>Alternative Begrüßungen</label><button id="addGreeting" class="mini">＋ Begrüßung hinzufügen</button></div><p class="muted">Zusätzliche Einstiege, die in SillyTavern neben der ersten Nachricht auswählbar sind.</p><div id="greetings"></div></section>
+        <section class="field greeting-editor" style="max-width:900px;margin:0 auto 13px"><div class="field-head"><label>Alternative Begrüßungen</label><div><button id="greetingLibraryBtn" class="mini">Begrüßungsbibliothek</button><button id="importGreetings" class="mini">Aus Karte importieren</button><button id="addGreeting" class="mini">＋ Begrüßung hinzufügen</button></div></div><p class="muted">Zusätzliche Einstiege, die in SillyTavern neben der ersten Nachricht auswählbar sind.</p><div id="greetings"></div></section>
       </div>
       <div id="tab-extras" class="tab-page"><div class="extras-grid">
         <label>Tags (durch Komma getrennt)<input id="tags" /></label><label>Creator<input id="creator" /></label><label>Version<input id="version" /></label>
@@ -82,7 +90,7 @@ app.innerHTML = `
       <div id="tab-lore" class="tab-page"><div class="lore-head"><div><h2>Character Lorebook</h2><p>Schlüsselwortgesteuerte Details für Orte, Figuren, Regeln und Gegenstände.</p></div><button id="addLore" class="ghost">＋ Eintrag</button></div><div id="loreEntries"></div></div>
       <div id="tab-wizard" class="tab-page">
         <div class="wizard">
-          <div class="wizard-progress"><span id="wizardCount"></span><i><b id="wizardBar"></b></i></div>
+          <div class="wizard-progress"><span id="wizardCount"></span><i><b id="wizardBar"></b></i><button id="wizardModeBtn" class="mini">Modus wechseln</button></div>
           <div class="wizard-card">
             <small>SCHRITT-FÜR-SCHRITT-CARD</small><h2 id="wizardTitle"></h2><p id="wizardHelp"></p>
             <div id="wizardDetails" class="wizard-detail-grid"></div>
@@ -108,13 +116,23 @@ app.innerHTML = `
   </main>
   <div id="settingsModal" class="modal hidden"><div class="modal-card settings-modal"><div class="field-head"><h3>Einstellungen</h3><button id="closeSettings">×</button></div>
     <label>Oberflächensprache<select id="uiLanguage"><option value="de">Deutsch</option><option value="en" disabled>English · folgt zum öffentlichen Release</option></select></label>
+    <label>Standard-Creator<input id="defaultCreator" placeholder="Wird bei neuen Karten eingetragen" /></label>
+    <label>Stärke der Token-Kürzung<select id="optimizeStrength"><option value="gentle">Behutsam · mehr Details behalten</option><option value="balanced">Ausgewogen</option><option value="strong">Stark · maximal kompakt</option></select></label>
     <label class="settings-toggle"><span><b>NSFW-Verarbeitung</b><small>Erwachsene fiktionale Inhalte bei lokalen Ollama-Aktionen erhalten.</small></span><input id="nsfwSetting" type="checkbox" /><i></i></label>
     <details><summary>Hilfe</summary><div class="settings-help"><p><b>Token minimieren</b> kürzt einzelne oder alle ausgewählten Felder. Jede Änderung erscheint vor der Übernahme im Prüffenster.</p><p><b>Fehlerprotokoll</b> enthält nur Zeitpunkt, Programmversion, Vorgang und technischen Fehlercode – niemals Kartenfelder, Prompts oder Notizen.</p><p>Protokoll: <code id="errorLogPath">Wird ermittelt …</code></p></div></details>
   </div></div>
+  <div id="componentModal" class="modal hidden"><div class="modal-card component-modal"><div class="field-head"><h3>Kartenbestandteile importieren</h3><button id="closeComponentImport">×</button></div><p id="componentSourceName"></p><p>Textfelder ersetzen den aktuellen Inhalt. Begrüßungen und Lorebook-Einträge werden hinzugefügt, Tags werden zusammengeführt.</p><div id="componentChecks" class="component-checks"></div><button id="applyComponentImport" class="primary wide">Ausgewählte Bestandteile importieren</button></div></div>
+  <div id="wizardModeModal" class="modal hidden"><div class="modal-card wizard-mode-modal"><div class="field-head"><h3>Wizard starten</h3><button id="closeWizardMode">×</button></div><p>Wie möchtest du den Schritt-für-Schritt-Wizard verwenden?</p><div class="wizard-mode-actions"><button id="wizardReviewMode" class="primary"><b>Vorhandene Karte prüfen</b><small>Aktuelle Inhalte laden und Feld für Feld überarbeiten.</small></button><button id="wizardNewMode" class="ghost"><b>Neue Karte erstellen</b><small>Aktuelle Karte verwerfen und mit einem leeren Wizard beginnen.</small></button></div></div></div>
   <div id="versionModal" class="modal hidden"><div class="modal-card"><div class="field-head"><h3>Letzte Kartenversionen</h3><button id="closeVersions">×</button></div><p>Vor jedem Speichern wird automatisch eine Version angelegt. Maximal drei werden behalten.</p><div id="versionList"></div></div></div>
+  <div id="greetingLibraryModal" class="modal hidden"><div class="modal-card greeting-library-modal"><div class="field-head"><h3>Alternative-Begrüßungen-Bibliothek</h3><button id="closeGreetingLibrary">×</button></div>
+    <p>Diese Bibliothek wird nur lokal auf deinem PC gespeichert. Einträge werden erst nach einem Klick zur geöffneten Karte hinzugefügt.</p>
+    <input id="greetingLibrarySearch" placeholder="Bibliothek durchsuchen …" />
+    <div class="greeting-library-create"><input id="greetingLibraryTitle" placeholder="Titel, z. B. Café am Morgen" /><textarea id="greetingLibraryText" rows="5" placeholder="Vollständige alternative Begrüßung …"></textarea><button id="saveGreetingTemplate" class="primary">In Bibliothek speichern</button><button id="captureCardGreetings" class="ghost">Alle Begrüßungen der Karte übernehmen</button></div>
+    <div id="greetingLibraryList" class="greeting-library-list"></div>
+  </div></div>
   <div id="reviewModal" class="modal review-modal hidden"><div class="review-card"><div class="field-head"><h3>Änderungen prüfen</h3><button id="closeReview">×</button></div><div class="review-request"><span>DEINE ANWEISUNG</span><p id="reviewRequest"></p></div><div class="review-actions"><button id="acceptAllReview" class="primary">✓ Alle übernehmen</button><button id="rejectReview" class="ghost">✕ Alle ablehnen</button></div><div id="reviewFields"></div><div class="review-footer"><button id="applyReview" class="primary">Ausgewählte Änderungen übernehmen</button></div></div></div>
   <div id="cropModal" class="modal crop-modal hidden"><div class="crop-card"><div class="field-head"><h3>Portrait zuschneiden</h3><button id="closeCrop">×</button></div><p>Bild verschieben und mit dem Regler zoomen. Der Export wird als 4:5-PNG mit 768 × 960 Pixeln gespeichert.</p><canvas id="cropCanvas" width="768" height="960"></canvas><label>Zoom<input id="cropZoom" type="range" min="1" max="3" step="0.01" value="1" /></label><div class="crop-actions"><button id="cropOriginal" class="ghost">Original verwenden</button><button id="applyCrop" class="primary">Zuschnitt übernehmen</button></div></div></div>
-  <div id="toast"></div><input id="fileInput" type="file" accept=".json,.png,application/json,image/png" hidden />`;
+  <div id="toast"></div><input id="fileInput" type="file" accept=".json,.png,application/json,image/png" hidden /><input id="componentFileInput" type="file" accept=".json,.png,application/json,image/png" hidden />`;
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
 function escapeAttr(v: string) { return v.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!)); }
@@ -122,12 +140,51 @@ function escapeHtml(v: string) { return escapeAttr(v).replace(/'/g, "&#39;"); }
 function loadDraft(): CharacterCard { try { return normalizeCard(JSON.parse(localStorage.getItem("draft") || "null")); } catch { return emptyCard(); } }
 function saveDraft() { localStorage.setItem("draft", JSON.stringify(card)); $("#saveState").textContent = "Lokal gespeichert"; }
 function changed() { $("#saveState").textContent = "Speichert …"; score = localScore(card); renderScore(); window.clearTimeout(statusTimer); statusTimer = window.setTimeout(saveDraft, 350); }
+function newCardWithDefaults() {
+  const next = emptyCard();
+  next.data.creator = localStorage.getItem("defaultCreator") || "";
+  return next;
+}
+function loadGreetingLibrary(): GreetingLibraryEntry[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem("greetingLibrary") || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(entry => entry && typeof entry.id === "string" && typeof entry.title === "string" && typeof entry.text === "string" && entry.text.trim());
+  } catch { return []; }
+}
+function saveGreetingLibrary() { localStorage.setItem("greetingLibrary", JSON.stringify(greetingLibrary)); }
+function greetingEntry(title: string, text: string): GreetingLibraryEntry {
+  return { id: crypto.randomUUID(), title: title.trim() || "Unbenannte Begrüßung", text: normalizePlaceholders(text.trim()), createdAt: new Date().toISOString() };
+}
+function addGreetingFromLibrary(text: string) {
+  const index = card.data.alternate_greetings.push(text) - 1;
+  selected.add(greetingField(index)); renderExtras(); renderChecks(); changed();
+  toast("Begrüßung zur Karte hinzugefügt.");
+}
+function reconcileSelectedFields() {
+  selected = new Set([...selected].filter(key => {
+    if (!key.startsWith("alternate_greeting:")) return aiFields.some(field => field.key === key);
+    const index = Number(key.split(":")[1]);
+    return Number.isInteger(index) && index >= 0 && index < card.data.alternate_greetings.length;
+  }));
+}
+function syncSelectionHighlights() {
+  document.querySelectorAll<HTMLElement>("[data-selection-key]").forEach(element => {
+    element.classList.toggle("selected-field", selected.has(element.dataset.selectionKey as EditableField));
+  });
+}
+function resetWizardState() {
+  wizardMode = null;
+  wizardStep = 0;
+  for (const key of Object.keys(wizardDrafts)) delete wizardDrafts[key as CoreEditableField];
+  for (const key of Object.keys(wizardDetails)) delete wizardDetails[key as CoreEditableField];
+}
 
 function renderFields() {
   $("#fields").innerHTML = textFields.map(f => {
     const value = typeof card.data[f.key] === "string" ? card.data[f.key] : "";
     const optimize = f.key === "creator_notes" ? "" : `<button class="field-optimize" data-optimize-one="${f.key}" title="Nur dieses Feld kompakter machen">Token sparen</button>`;
-    return `<article class="field ${activeField === f.key ? "focused" : ""}" data-key="${f.key}"><div class="field-head"><label>${f.label}</label><div>${optimize}<span>${value.length} Zeichen</span></div></div>${f.rows === 1 ? `<input data-field="${f.key}" value="${escapeAttr(value)}" placeholder="${escapeAttr(f.hint)}" />` : `<textarea data-field="${f.key}" rows="${f.rows}" placeholder="${escapeAttr(f.hint)}">${escapeHtml(value)}</textarea>`}</article>`;
+    return `<article class="field ${activeField === f.key ? "focused" : ""} ${selected.has(f.key) ? "selected-field" : ""}" data-key="${f.key}" data-selection-key="${f.key}"><div class="field-head"><label>${f.label}</label><div>${optimize}<span>${value.length} Zeichen</span></div></div>${f.rows === 1 ? `<input data-field="${f.key}" value="${escapeAttr(value)}" placeholder="${escapeAttr(f.hint)}" />` : `<textarea data-field="${f.key}" rows="${f.rows}" placeholder="${escapeAttr(f.hint)}">${escapeHtml(value)}</textarea>`}</article>`;
   }).join("");
   document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("[data-field]").forEach(el => {
     el.addEventListener("focus", () => { activeField = el.dataset.field as CoreEditableField; document.querySelectorAll(".field").forEach(n => n.classList.toggle("focused", (n as HTMLElement).dataset.key === activeField)); });
@@ -141,7 +198,7 @@ function renderChecks() {
   const core = aiFields.map(f => `<label class="check"><input type="checkbox" data-check="${f.key}" ${selected.has(f.key) ? "checked" : ""}/><span>${f.label}</span></label>`).join("");
   const greetings = card.data.alternate_greetings.map((_, index) => { const key = greetingField(index); return `<label class="check"><input type="checkbox" data-check="${key}" ${selected.has(key) ? "checked" : ""}/><span>Alternative Begrüßung ${index + 1}</span></label>`; }).join("");
   $("#fieldChecks").innerHTML = core + greetings;
-  document.querySelectorAll<HTMLInputElement>("[data-check]").forEach(c => c.onchange = () => { const k = c.dataset.check as EditableField; c.checked ? selected.add(k) : selected.delete(k); });
+  document.querySelectorAll<HTMLInputElement>("[data-check]").forEach(c => c.onchange = () => { const k = c.dataset.check as EditableField; c.checked ? selected.add(k) : selected.delete(k); syncSelectionHighlights(); });
 }
 function removeGreeting(index: number) {
   const next = new Set<EditableField>();
@@ -168,13 +225,35 @@ function renderExtras() {
     $("#talkativenessValue").textContent = percent + "%";
     changed();
   };
-  $("#greetings").innerHTML = card.data.alternate_greetings.map((g, i) => `<div class="repeat"><textarea rows="5" data-greeting="${i}" placeholder="Alternative Begrüßung ${i + 1}">${escapeHtml(g)}</textarea><button data-remove-greeting="${i}">×</button></div>`).join("") || `<p class="muted">Noch keine alternativen Begrüßungen.</p>`;
+  $("#greetings").innerHTML = card.data.alternate_greetings.map((g, i) => `<div class="repeat ${selected.has(greetingField(i)) ? "selected-field" : ""}" data-selection-key="${greetingField(i)}"><textarea rows="5" data-greeting="${i}" placeholder="Alternative Begrüßung ${i + 1}">${escapeHtml(g)}</textarea><button data-remove-greeting="${i}">×</button></div>`).join("") || `<p class="muted">Noch keine alternativen Begrüßungen.</p>`;
   document.querySelectorAll<HTMLTextAreaElement>("[data-greeting]").forEach(el => {
     el.oninput = () => { card.data.alternate_greetings[Number(el.dataset.greeting)] = el.value; changed(); };
     el.onchange = () => { const index = Number(el.dataset.greeting); const value = normalizePlaceholders(el.value); if (value !== el.value) { el.value = value; card.data.alternate_greetings[index] = value; changed(); } };
   });
   document.querySelectorAll<HTMLButtonElement>("[data-remove-greeting]").forEach(el => el.onclick = () => removeGreeting(Number(el.dataset.removeGreeting)));
 }
+function renderGreetingLibrary() {
+  const query = ($("#greetingLibrarySearch") as HTMLInputElement).value.trim().toLocaleLowerCase();
+  const visible = greetingLibrary.filter(entry => !query || (entry.title + "\n" + entry.text).toLocaleLowerCase().includes(query));
+  $("#greetingLibraryList").innerHTML = visible.map(entry => `<article class="greeting-library-item"><div><b>${escapeHtml(entry.title)}</b><small>${escapeHtml(entry.text)}</small></div><button class="primary" data-use-greeting="${escapeAttr(entry.id)}">Zur Karte</button><button class="danger-link" data-delete-greeting="${escapeAttr(entry.id)}">Löschen</button></article>`).join("") || `<p class="muted">Keine passenden Begrüßungen gespeichert.</p>`;
+  document.querySelectorAll<HTMLButtonElement>("[data-use-greeting]").forEach(button => button.onclick = () => {
+    const entry = greetingLibrary.find(item => item.id === button.dataset.useGreeting);
+    if (entry) addGreetingFromLibrary(entry.text);
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-delete-greeting]").forEach(button => button.onclick = () => {
+    greetingLibrary = greetingLibrary.filter(item => item.id !== button.dataset.deleteGreeting);
+    saveGreetingLibrary(); renderGreetingLibrary();
+  });
+}
+function openGreetingLibrary() {
+  ($("#greetingLibrarySearch") as HTMLInputElement).value = "";
+  ($("#greetingLibraryTitle") as HTMLInputElement).value = "";
+  ($("#greetingLibraryText") as HTMLTextAreaElement).value = "";
+  renderGreetingLibrary();
+  $("#greetingLibraryModal").classList.remove("hidden");
+}
+function closeGreetingLibrary() { $("#greetingLibraryModal").classList.add("hidden"); }
+
 function renderLore() {
   const entries = card.data.character_book?.entries ?? [];
   const positions = [[0,"Vor Character Definition"],[1,"Nach Character Definition"],[5,"Vor Dialogbeispielen"],[6,"Nach Dialogbeispielen"],[2,"Oben in Author's Note"],[3,"Unten in Author's Note"],[4,"Im Chat bei Tiefe"]] as const;
@@ -190,7 +269,7 @@ function renderPortrait() {
   const p=$("#portrait"); p.innerHTML = `<img src="${imageUrl || defaultPortraitUrl}" alt="Character portrait" />${imageUrl ? "" : "<span>Standardportrait</span>"}`;
   $("#cropImageBtn").classList.toggle("hidden", !imageBuffer);
 }
-function renderAll() { renderFields(); renderChecks(); renderExtras(); renderLore(); renderScore(); renderPortrait(); }
+function renderAll() { reconcileSelectedFields(); renderFields(); renderChecks(); renderExtras(); renderLore(); renderScore(); renderPortrait(); syncSelectionHighlights(); }
 
 function toast(message: string, bad=false) { const t=$("#toast"); t.textContent=message; t.className=bad?"show bad":"show"; setTimeout(()=>t.className="",3000); }
 function resetAiInstruction() {
@@ -356,7 +435,7 @@ async function loadBuildInfo() {
   try {
     const info = await window.__TAURI__?.core.invoke<{ version: string; commit: string }>("build_info");
     if (info) $("#buildInfo").textContent = `v${info.version} · ${info.commit}`;
-  } catch { $("#buildInfo").textContent = "v0.3.0 · development"; }
+  } catch { $("#buildInfo").textContent = "v0.3.1 · development"; }
 }
 function technicalErrorKind(error: unknown): string {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
@@ -375,10 +454,66 @@ function recordTechnicalError(operation: string, error: unknown) {
   }).catch(() => undefined);
 }
 async function importFile(file: File) {
+  resetWizardState();
   if (file.name.toLowerCase().endsWith(".json")) { card=normalizeCard(JSON.parse(await file.text())); clearPortrait(); }
   else { const buffer=await file.arrayBuffer(); const found=extractCard(buffer); if (!found) throw new Error("Dieses PNG enthält keine Character-Card-Metadaten."); card=found; commitPortrait(buffer); }
   resetAiInstruction();
   score=localScore(card); renderAll(); saveDraft(); toast(`${card.data.name} importiert.`);
+}
+async function readCardOnly(file: File): Promise<CharacterCard> {
+  if (file.name.toLowerCase().endsWith(".json")) return normalizeCard(JSON.parse(await file.text()));
+  const parsed = extractCard(await file.arrayBuffer());
+  if (!parsed) throw new Error("Dieses PNG enthält keine lesbare Character Card.");
+  return parsed;
+}
+function importPartAvailable(source: CharacterCard, part: ImportPart): boolean {
+  if (part === "alternate_greetings") return source.data.alternate_greetings.length > 0;
+  if (part === "tags") return source.data.tags.length > 0;
+  if (part === "character_book") return !!source.data.character_book?.entries.length;
+  if (part === "talkativeness") return source.data.extensions.talkativeness != null;
+  return Boolean(source.data[part as CoreEditableField]?.toString().trim());
+}
+function showComponentImport(source: CharacterCard) {
+  componentSource = source;
+  $("#componentSourceName").textContent = "Quelle: " + (source.data.name || "Unbenannte Karte");
+  $("#componentChecks").innerHTML = importPartLabels.map(([part,label]) => {
+    const available = importPartAvailable(source, part);
+    return `<label class="check ${available ? "" : "unavailable"}"><input type="checkbox" data-import-part="${part}" ${available ? "" : "disabled"} /><span>${escapeHtml(label)}${available ? "" : " · nicht vorhanden"}</span></label>`;
+  }).join("");
+  $("#componentModal").classList.remove("hidden");
+}
+async function handleComponentFile(file: File) {
+  const source = await readCardOnly(file);
+  if (componentImportMode === "greetings") {
+    if (!source.data.alternate_greetings.length) throw new Error("Die gewählte Karte enthält keine alternativen Begrüßungen.");
+    const count = source.data.alternate_greetings.length;
+    card = importCardParts(card, source, ["alternate_greetings"]);
+    reconcileSelectedFields();
+    renderAll();
+    changed();
+    toast(count + " alternative Begrüßung" + (count === 1 ? "" : "en") + " hinzugefügt.");
+    return;
+  }
+  showComponentImport(source);
+}
+function openComponentPicker(mode: "greetings" | "parts") {
+  componentImportMode = mode;
+  const input = $("#componentFileInput") as HTMLInputElement;
+  input.value = "";
+  input.click();
+}
+function applySelectedComponents() {
+  if (!componentSource) return;
+  const parts = [...document.querySelectorAll<HTMLInputElement>("[data-import-part]:checked")].map(input => input.dataset.importPart as ImportPart);
+  if (!parts.length) { toast("Bitte mindestens einen Kartenbestandteil auswählen.", true); return; }
+  card = importCardParts(card, componentSource, parts);
+  componentSource = null;
+  $("#componentModal").classList.add("hidden");
+  reconcileSelectedFields();
+  score = localScore(card);
+  renderAll();
+  changed();
+  toast(parts.length + " Kartenbestandteil" + (parts.length === 1 ? "" : "e") + " importiert.");
 }
 async function ai(action: "edit"|"translate"|"suggest"|"grade"|"lorebook"|"optimize", fieldOverride?: EditableField[]) {
   if(aiBusy)return;
@@ -400,13 +535,13 @@ async function ai(action: "edit"|"translate"|"suggest"|"grade"|"lorebook"|"optim
       for (let index = 0; index < selectedFields.length; index++) {
         const field = selectedFields[index];
         timer.update(`Ollama bearbeitet ${fieldTitle(field)} · ${index + 1}/${selectedFields.length} …`);
-        const partial = await runAi({ baseUrl, model, action, card, selected: [field], instruction, language, nsfw });
+        const partial = await runAi({ baseUrl, model, action, card, selected: [field], instruction, language, nsfw, optimizationStrength: optimizeStrength });
         Object.assign(combinedFields, partial.fields);
         if (partial.explanation) explanations.push(partial.explanation);
       }
       result = { fields: combinedFields, explanation: explanations.join("\n") };
     } else {
-      result = await runAi({ baseUrl, model, action, card, selected: selectedFields, instruction, language, nsfw });
+      result = await runAi({ baseUrl, model, action, card, selected: selectedFields, instruction, language, nsfw, optimizationStrength: optimizeStrength });
     }
     timer.stop();
     if ((action === "edit" || action === "translate" || action === "optimize") && result.fields) {
@@ -455,7 +590,7 @@ function applyAiResult(r: AiResult, action: string, allowedFields = selected) {
   $("#aiOutput").innerHTML=`<div class="result"><b>✓ ${action==="grade"?"Bewertung abgeschlossen":"Ergebnis übernommen"}</b>${r.explanation?`<p>${escapeHtml(r.explanation)}</p>`:""}${items?`<ol>${items}</ol>`:""}${r.score?`<p class="big-result">${r.score.total}<small>/100</small></p>`:""}${r.lorebook?`<p>${Object.keys(r.lorebook.entries).length} Lorebook-Einträge erstellt.</p>`:""}</div>`;
 }
 
-$("#newBtn").onclick=()=>{if(!confirm("Aktuelle Karte durch eine neue ersetzen? Der letzte Stand bleibt nur im lokalen Entwurf."))return; card=emptyCard();clearPortrait();linkedPath=null;linkedFormat=null;wizardStep=0;resetAiInstruction();score=localScore(card);renderAll();syncLinkedButtons();changed();};
+$("#newBtn").onclick=()=>{if(!confirm("Aktuelle Karte durch eine neue ersetzen? Der letzte Stand bleibt nur im lokalen Entwurf."))return; card=newCardWithDefaults();clearPortrait();linkedPath=null;linkedFormat=null;resetWizardState();resetAiInstruction();score=localScore(card);renderAll();syncLinkedButtons();changed();};
 $("#importBtn").onclick=()=>$("#fileInput").click(); $("#fileInput").onchange=async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(f)try{linkedPath=null;linkedFormat=null;await importFile(f);syncLinkedButtons();}catch(err){toast(err instanceof Error?err.message:String(err),true);}};
 $("#imageBtn").onclick=()=>$("#imageInput").click(); $("#portrait").onclick=()=>$("#imageInput").click(); $("#imageInput").onchange=async e=>{const input=e.target as HTMLInputElement;const f=input.files?.[0];if(!f)return;try{await openCrop(await imageAsPng(f));}catch(error){toast(error instanceof Error?error.message:String(error),true);}finally{input.value="";}};
 $("#cropImageBtn").onclick=()=>{if(imageBuffer)void openCrop(imageBuffer);};
@@ -488,9 +623,34 @@ $("#pngBtn").onclick=async()=>{
   } catch(error) { toast(error instanceof Error ? error.message : String(error), true); }
 };
 $("#refreshModels").onclick=async()=>{const url=($(`#ollamaUrl`) as HTMLInputElement).value;localStorage.setItem("ollamaUrl",url);const sel=$(`#model`) as HTMLSelectElement;sel.innerHTML=`<option>Lädt …</option>`;try{const list=await models(url);sel.innerHTML=list.map(m=>`<option>${escapeHtml(m)}</option>`).join("")||`<option value="">Keine Modelle gefunden</option>`;const last=localStorage.getItem("model");if(last&&list.includes(last))sel.value=last;toast(`${list.length} Ollama-Modelle gefunden.`);}catch(e){sel.innerHTML=`<option value="">Ollama nicht erreichbar</option>`;toast(e instanceof Error?e.message:String(e),true);}};
-$("#model").onchange=e=>localStorage.setItem("model",(e.target as HTMLSelectElement).value); $("#allFields").onclick=()=>{selected=new Set<EditableField>([...aiFields.map(x=>x.key),...card.data.alternate_greetings.map((_,index)=>greetingField(index))]);renderChecks();};
+$("#model").onchange=e=>localStorage.setItem("model",(e.target as HTMLSelectElement).value); $("#allFields").onclick=()=>{selected=new Set<EditableField>([...aiFields.map(x=>x.key),...card.data.alternate_greetings.map((_,index)=>greetingField(index))]);renderChecks();syncSelectionHighlights();};
 $("#editAi").onclick=()=>ai("edit"); document.querySelectorAll<HTMLButtonElement>("[data-ai]").forEach(b=>b.onclick=()=>ai(b.dataset.ai as any));
 $("#addGreeting").onclick=()=>{const index=card.data.alternate_greetings.push("")-1;selected.add(greetingField(index));renderExtras();renderChecks();changed();};
+$("#importGreetings").onclick=()=>openComponentPicker("greetings");
+$("#partsImportBtn").onclick=()=>openComponentPicker("parts");
+$("#componentFileInput").onchange=async event=>{const input=event.target as HTMLInputElement;const file=input.files?.[0];if(file)try{await handleComponentFile(file);}catch(error){toast(error instanceof Error?error.message:String(error),true);}finally{input.value="";}};
+$("#applyComponentImport").onclick=applySelectedComponents;
+$("#closeComponentImport").onclick=()=>{$("#componentModal").classList.add("hidden");componentSource=null;};
+$("#componentModal").addEventListener("click",event=>{if(event.target===$("#componentModal")){$("#componentModal").classList.add("hidden");componentSource=null;}});
+$("#greetingLibraryBtn").onclick=openGreetingLibrary;
+$("#closeGreetingLibrary").onclick=closeGreetingLibrary;
+$("#greetingLibraryModal").addEventListener("click",event=>{if(event.target===$("#greetingLibraryModal"))closeGreetingLibrary();});
+$("#greetingLibrarySearch").oninput=renderGreetingLibrary;
+$("#saveGreetingTemplate").onclick=()=>{
+  const title=($("#greetingLibraryTitle") as HTMLInputElement).value;
+  const text=($("#greetingLibraryText") as HTMLTextAreaElement).value;
+  if(!text.trim()){toast("Bitte zuerst eine Begrüßung eingeben.",true);return;}
+  greetingLibrary.unshift(greetingEntry(title,text));saveGreetingLibrary();renderGreetingLibrary();
+  ($("#greetingLibraryTitle") as HTMLInputElement).value="";($("#greetingLibraryText") as HTMLTextAreaElement).value="";
+  toast("Begrüßung lokal gespeichert.");
+};
+$("#captureCardGreetings").onclick=()=>{
+  const existing=new Set(greetingLibrary.map(entry=>entry.text.trim()));
+  const additions=card.data.alternate_greetings.filter(text=>text.trim()&&!existing.has(text.trim()));
+  additions.forEach((text,index)=>greetingLibrary.unshift(greetingEntry((card.data.name||"Karte")+" · Begrüßung "+(index+1),text)));
+  saveGreetingLibrary();renderGreetingLibrary();
+  toast(additions.length?additions.length+" Begrüßung(en) übernommen.":"Alle Begrüßungen sind bereits gespeichert.");
+};
 $("#addLore").onclick=()=>{if(!card.data.character_book)card.data.character_book={name:`${card.data.name} Lorebook`,entries:[]};const i=card.data.character_book.entries.length;card.data.character_book.entries.push(normalizeLoreEntry({},i));renderLore();changed();};
 [$("#tags"),$("#creator"),$("#version")].forEach(el=>el.addEventListener("input",()=>{card.data.tags=($(`#tags`) as HTMLInputElement).value.split(",").map(x=>x.trim()).filter(Boolean);card.data.creator=($(`#creator`) as HTMLInputElement).value;card.data.character_version=($(`#version`) as HTMLInputElement).value;changed();}));
 document.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(b=>b.onclick=()=>selectTab(b.dataset.tab!));
@@ -520,6 +680,7 @@ const wizardPrompts: Record<CoreEditableField, [string,string][]> = {
 const wizardDetails: Partial<Record<CoreEditableField, string[]>> = {};
 
 async function openLibraryCard(bytes: Uint8Array, entry: LibraryEntry) {
+  resetWizardState();
   const buffer = bytes.slice().buffer as ArrayBuffer;
   if (entry.format === "PNG") {
     const parsed = extractCard(buffer);
@@ -592,6 +753,7 @@ async function showVersions() {
 }
 
 function renderWizard() {
+  if (!wizardMode) return;
   const done = wizardStep >= wizardSteps.length;
   $(".wizard-card").classList.toggle("hidden", done);
   $("#wizardDone").classList.toggle("hidden", !done);
@@ -650,7 +812,8 @@ async function expandWizardStep() {
       selected: [step.field],
       instruction,
       language: ($("#language") as HTMLSelectElement).value,
-      nsfw: true
+      nsfw: true,
+      optimizationStrength: optimizeStrength
     });
     const value = result.fields?.[step.field];
     if (!value) throw new Error("Ollama hat für dieses Feld keinen Text zurückgegeben.");
@@ -676,7 +839,32 @@ async function expandWizardStep() {
 function selectTab(name: string) {
   document.querySelectorAll("[data-tab]").forEach(element => element.classList.toggle("active", (element as HTMLElement).dataset.tab === name));
   document.querySelectorAll(".tab-page").forEach(element => element.classList.toggle("active", element.id === "tab-" + name));
-  if (name === "wizard") renderWizard();
+  if (name === "wizard") {
+    if (!wizardMode) $("#wizardModeModal").classList.remove("hidden");
+    else renderWizard();
+  }
+}
+
+function chooseWizardMode(mode: "new" | "review") {
+  if (mode === "new" && !confirm("Die aktuelle Karte wirklich durch eine neue Wizard-Karte ersetzen?")) return;
+  resetWizardState();
+  wizardMode = mode;
+  if (mode === "new") {
+    card = newCardWithDefaults();
+    clearPortrait();
+    linkedPath = null;
+    linkedFormat = null;
+    selected = new Set<EditableField>(["description", "personality", "scenario", "first_mes"]);
+    resetAiInstruction();
+    changed();
+  } else {
+    for (const step of wizardSteps) wizardDrafts[step.field] = card.data[step.field] || "";
+  }
+  $("#wizardModeModal").classList.add("hidden");
+  score = localScore(card);
+  renderAll();
+  syncLinkedButtons();
+  renderWizard();
 }
 
 const library = new CardLibrary(openLibraryCard);
@@ -703,17 +891,31 @@ $("#wizardNext").onclick = () => {
 $("#wizardUse").onclick = useWizardNotes;
 $("#wizardAi").onclick = () => void expandWizardStep();
 $("#wizardFinish").onclick = () => selectTab("fields");
+$("#wizardModeBtn").onclick = () => $("#wizardModeModal").classList.remove("hidden");
+$("#wizardReviewMode").onclick = () => chooseWizardMode("review");
+$("#wizardNewMode").onclick = () => chooseWizardMode("new");
+$("#closeWizardMode").onclick = () => { $("#wizardModeModal").classList.add("hidden"); if (!wizardMode) selectTab("fields"); };
+$("#wizardModeModal").addEventListener("click", event => {
+  if (event.target === $("#wizardModeModal")) { $("#wizardModeModal").classList.add("hidden"); if (!wizardMode) selectTab("fields"); }
+});
 $("#repoLink").onclick = async () => {
   try { await window.__TAURI__?.core.invoke("open_repository"); }
   catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
 };
 $("#uiLanguage").onchange = event => localStorage.setItem("uiLanguage", (event.target as HTMLSelectElement).value);
+$("#defaultCreator").oninput = event => localStorage.setItem("defaultCreator", (event.target as HTMLInputElement).value);
+$("#optimizeStrength").onchange = event => {
+  optimizeStrength = (event.target as HTMLSelectElement).value as "gentle"|"balanced"|"strong";
+  localStorage.setItem("optimizeStrength", optimizeStrength);
+};
 void loadBuildInfo();
 window.addEventListener("error", event => recordTechnicalError("window_error", event.error));
 window.addEventListener("unhandledrejection", event => recordTechnicalError("unhandled_promise", event.reason));
 $("#settingsBtn").onclick = async () => {
   ($("#nsfwSetting") as HTMLInputElement).checked = nsfwEnabled;
   ($("#uiLanguage") as HTMLSelectElement).value = localStorage.getItem("uiLanguage") || "de";
+  ($("#defaultCreator") as HTMLInputElement).value = localStorage.getItem("defaultCreator") || "";
+  ($("#optimizeStrength") as HTMLSelectElement).value = optimizeStrength;
   $("#settingsModal").classList.remove("hidden");
   try { $("#errorLogPath").textContent = await window.__TAURI__?.core.invoke<string>("error_log_location") ?? "Nur in der Desktop-App verfügbar"; }
   catch { $("#errorLogPath").textContent = "Pfad konnte nicht ermittelt werden"; }

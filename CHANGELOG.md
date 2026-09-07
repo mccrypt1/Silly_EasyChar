@@ -2,6 +2,34 @@
 
 All notable changes to Silly EasyChar are documented here. Each release lists English notes first, followed by the German translation.
 
+## v0.3.1
+
+### English
+
+- Added an expandable, searchable offline library for reusable alternate greetings, with manual entries and capture from the current card.
+- Added one-click import of alternate greetings from another JSON or PNG character card.
+- Added selective component import for text fields, alternate greetings, tags, creator metadata, talkativeness, and Lorebook entries.
+- Added configurable gentle, balanced, and strong token-reduction profiles based on field-specific compactness targets.
+- Enforced a hard 650-character System Prompt limit with an automatic compaction retry, plus a 350-character Post-History limit.
+- Tightened Lorebook generation to concise, standalone entries that are normally 1–3 sentences or roughly 20–60 tokens.
+- Added a persistent default creator setting for newly created cards.
+- Added clear highlighted borders around every field currently selected for Ollama editing.
+- Fixed stale dynamic greeting selections that could create or edit a nonexistent example after importing another card.
+- Added explicit Wizard modes for creating a new card or reviewing the currently loaded card step by step with its existing content prefilled.
+
+### Deutsch
+
+- Alternative Begrüßungen lassen sich jetzt mit einem Klick aus einer anderen JSON- oder PNG-Character-Card importieren.
+- Eine erweiterbare, durchsuchbare Offline-Bibliothek speichert wiederverwendbare alternative Begrüßungen manuell oder direkt aus der aktuellen Karte.
+- Kartenbestandteile wie Textfelder, alternative Begrüßungen, Tags, Creator-Metadaten, Talkativeness und Lorebook-Einträge können gezielt importiert werden.
+- Für die Token-Reduzierung gibt es nun die einstellbaren Stärken sanft, ausgewogen und stark mit feldspezifischen Zielgrößen.
+- System Prompts sind fest auf 650 Zeichen begrenzt und werden bei Überschreitung automatisch erneut komprimiert; Post-History Instructions sind auf 350 Zeichen begrenzt.
+- Lorebook-Einträge werden kompakt und eigenständig erzeugt, normalerweise mit 1–3 Sätzen beziehungsweise ungefähr 20–60 Tokens.
+- In den Einstellungen kann ein dauerhafter Standard-Creator für neue Karten festgelegt werden.
+- Alle zur Ollama-Bearbeitung ausgewählten Felder werden jetzt mit einem deutlichen Rahmen hervorgehoben.
+- Veraltete dynamische Begrüßungsauswahlen werden bereinigt, damit nach einem Kartenimport keine nicht vorhandenen Beispiele erzeugt oder bearbeitet werden.
+- Der Wizard bietet nun ausdrücklich die Modi „Neue Karte“ und „Vorhandene Karte prüfen“; vorhandene Inhalte werden beim schrittweisen Prüfen vorausgefüllt.
+
 ## v0.3.0
 
 ### English
