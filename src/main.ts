@@ -84,6 +84,7 @@ app.innerHTML = `
       <nav class="tabs"><button data-tab="fields" class="active">Charakter</button><button data-tab="wizard">Wizard</button><button data-tab="extras">Extras</button><button data-tab="lore">Lorebook</button><span id="saveState">Lokal gespeichert</span></nav>
       <div id="tab-fields" class="tab-page active"><div id="fields" class="fields"></div>
         <section class="field greeting-editor" style="max-width:900px;margin:0 auto 13px"><div class="field-head"><label>Alternative Begrüßungen</label><div><button id="greetingLibraryBtn" class="mini">Begrüßungsbibliothek</button><button id="importGreetings" class="mini">Aus Karte importieren</button><button id="addGreeting" class="mini">＋ Begrüßung hinzufügen</button></div></div><p class="muted">Zusätzliche Einstiege, die in SillyTavern neben der ersten Nachricht auswählbar sind.</p><div id="greetings"></div></section>
+        <div id="fieldsAfterGreetings" class="fields"></div>
       </div>
       <div id="tab-extras" class="tab-page"><div class="extras-grid">
         <label>Tags (durch Komma getrennt)<input id="tags" /></label><label>Creator<input id="creator" /></label><label>Version<input id="version" /></label>
@@ -205,11 +206,14 @@ function resetWizardState() {
 }
 
 function renderFields() {
-  $("#fields").innerHTML = textFields.map(f => {
+  const markup = (fields: typeof textFields) => fields.map(f => {
     const value = typeof card.data[f.key] === "string" ? card.data[f.key] : "";
     const optimize = f.key === "creator_notes" ? "" : `<button class="field-optimize" data-optimize-one="${f.key}" title="Nur dieses Feld kompakter machen">Token sparen</button>`;
     return `<article class="field ${activeField === f.key ? "focused" : ""} ${selected.has(f.key) ? "selected-field" : ""}" data-key="${f.key}" data-selection-key="${f.key}"><div class="field-head"><label>${f.label}</label><div>${optimize}<span>${value.length} Zeichen</span></div></div>${f.rows === 1 ? `<input data-field="${f.key}" value="${escapeAttr(value)}" placeholder="${escapeAttr(f.hint)}" />` : `<textarea data-field="${f.key}" rows="${f.rows}" placeholder="${escapeAttr(f.hint)}">${escapeHtml(value)}</textarea>`}</article>`;
   }).join("");
+  const afterGreetings = textFields.findIndex(field => field.key === "creator_notes");
+  $("#fields").innerHTML = markup(textFields.slice(0, afterGreetings));
+  $("#fieldsAfterGreetings").innerHTML = markup(textFields.slice(afterGreetings));
   document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("[data-field]").forEach(el => {
     el.addEventListener("focus", () => { activeField = el.dataset.field as CoreEditableField; document.querySelectorAll(".field").forEach(n => n.classList.toggle("focused", (n as HTMLElement).dataset.key === activeField)); });
     el.addEventListener("input", () => { card.data[el.dataset.field as CoreEditableField] = el.value; el.closest(".field")!.querySelector("span")!.textContent = `${el.value.length} Zeichen`; changed(); });
@@ -509,7 +513,7 @@ async function loadBuildInfo() {
   try {
     const info = await window.__TAURI__?.core.invoke<{ version: string; commit: string }>("build_info");
     if (info) $("#buildInfo").textContent = `v${info.version} · ${info.commit}`;
-  } catch { $("#buildInfo").textContent = "v0.3.3 · development"; }
+  } catch { $("#buildInfo").textContent = "v0.3.4 · development"; }
 }
 function technicalErrorKind(error: unknown): string {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();

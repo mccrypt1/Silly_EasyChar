@@ -2,6 +2,17 @@
 
 All notable changes to Silly EasyChar are documented here. Each release lists English notes first, followed by the German translation.
 
+## v0.3.4
+
+### English
+
+- Reordered the Character editor so Alternate Greetings now appear directly after Message Examples and before Creator Notes, System Prompt, and Post-History Instructions.
+
+### Deutsch
+
+- Die Reihenfolge im Character-Editor lautet nun: Dialogbeispiele, Alternative Begrüßungen, Creator Notes, System Prompt und Post-History Instructions.
+
+
 ## v0.3.3
 
 ### English
