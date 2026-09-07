@@ -42,6 +42,23 @@ describe("Ollama result handling", () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
+  it("sends and edits one dynamic dialogue example without mixing in other examples", async () => {
+    const replacement = `<START>\n{{user}}: Are you ready?\n{{char}}: *She checks the quiet platform clock and smiles.* "We have time for one last coffee before the train arrives, if you want one."`;
+    const invoke = vi.fn().mockResolvedValue(JSON.stringify({ fields: { "mes_example:1": replacement } }));
+    vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });
+    const card = emptyCard();
+    card.data.mes_example = "<START>\n{{user}}: PRIVATE_FIRST_SCENE\n{{char}}: Hidden\n\n<START>\n{{user}}: Station?\n{{char}}: Train.";
+    const result = await runAi({
+      baseUrl: "http://127.0.0.1:8787", model: "test", action: "edit", card,
+      selected: ["mes_example:1"], instruction: "Make this scene warmer", language: "English", nsfw: false
+    });
+    const request = invoke.mock.calls[0][1] as { prompt: string };
+    expect(request.prompt).toContain("{{user}}: Station?");
+    expect(request.prompt).not.toContain("PRIVATE_FIRST_SCENE");
+    expect(request.prompt).toContain("exactly one <START>");
+    expect(result.fields?.["mes_example:1"]).toBe(replacement);
+  });
+
   it("asks Ollama to choose contextual lorebook activation settings", async () => {
     const invoke = vi.fn().mockResolvedValue('{"lorebook":{"entries":{}}}');
     vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });

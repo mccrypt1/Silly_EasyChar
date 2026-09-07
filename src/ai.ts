@@ -1,5 +1,6 @@
 import type { AiResult, CharacterCard, CoreEditableField, EditableField } from "./types";
 import { normalizePlaceholders } from "./card";
+import { splitDialogueExamples } from "./dialogue-examples";
 
 declare global { interface Window { __TAURI__?: { core: { invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> } } } }
 
@@ -12,6 +13,9 @@ const fieldLabels: Record<CoreEditableField, string> = {
 function fieldLabel(field: EditableField): string {
   if (field.startsWith("alternate_greeting:")) {
     return `Alternate Greeting ${Number(field.split(":")[1]) + 1}`;
+  }
+  if (field.startsWith("mes_example:")) {
+    return `Message Example ${Number(field.split(":")[1]) + 1}`;
   }
   return fieldLabels[field as CoreEditableField];
 }
@@ -82,6 +86,7 @@ ${args.text}`;
 function valueForField(card: CharacterCard, field: EditableField): string {
 
   if (field.startsWith("alternate_greeting:")) return card.data.alternate_greetings[Number(field.split(":")[1])] ?? "";
+  if (field.startsWith("mes_example:")) return splitDialogueExamples(card.data.mes_example)[Number(field.split(":")[1])] ?? "";
   const value = card.data[field as CoreEditableField];
   return typeof value === "string" ? value : "";
 }
@@ -122,9 +127,10 @@ Return ONLY strict, parseable JSON with double-quoted property names and escaped
   const optimizationProfile = optimizationProfiles[args.optimizationStrength ?? "balanced"];
   if (args.action === "translate") task = `Translate ONLY these fields to ${args.language}: ${selected}. Preserve placeholders, markdown, line breaks, names, and meaning. Return {"fields":{"field":"translation"},"explanation":"short summary in ${args.language}"}.`;
   if (args.action === "edit") task = `Edit ONLY these fields: ${selected}. User request: ${args.instruction || "Improve quality, clarity, consistency, and roleplay utility."}
-Create substantially expanded, complete replacements in one pass instead of merely appending a few sentences. Unless the user requests brevity, aim for roughly 500–1200 characters each for description/personality/scenario, 600–1600 for first_mes, and 3–5 varied exchanges for mes_example. Keep the name concise. Use all useful facts already present, add fitting detail without contradictions, and distribute information into its semantically correct field; never stuff personality, scenario, examples, or instructions into description.
+Create substantially expanded, complete replacements in one pass instead of merely appending a few sentences. Unless the user requests brevity, aim for roughly 500–1200 characters each for description/personality/scenario, 600–1600 for first_mes, and 3–5 varied exchanges only when editing the legacy combined mes_example field. Keep the name concise. Use all useful facts already present, add fitting detail without contradictions, and distribute information into its semantically correct field; never stuff personality, scenario, examples, or instructions into description.
 Preserve the existing language of each non-empty source field. The configured output language applies only to explanations and newly created empty fields. Never translate an edited field unless the user explicitly requests translation.
 For alternate greetings, return each exact dynamic key such as "alternate_greeting:0" separately. Each alternate greeting must be a complete 600–1600 character roleplay opening with atmosphere, visible action, a distinct situation, a clear conversation hook, and at least one natural {{user}} reference; never decide {{user}}'s response or actions. Return {"fields":{"field":"complete replacement"},"explanation":"short summary in ${args.language}"}.`;
+  if (args.action === "edit" && args.selected.some(field => field.startsWith("mes_example:"))) task += ` Each selected mes_example:N key is exactly one independent dialogue example. Return the same exact dynamic key, begin it with exactly one <START> line, include literal {{user}}: and {{char}}: prefixes, and keep its scene, mood, and nuance independent from every other example. Never merge examples or return multiple <START> blocks for one key.`;
   if (args.action === "edit" && args.selected.includes("mes_example")) task += ` Every separate dialogue example must begin with <START> on its own line, followed by at least one {{user}}: message and one {{char}}: message. Use the literal prefixes exactly, create 3–5 separate <START> blocks, and demonstrate the character voice, mannerisms, actions, and emotional range. Never use User:, Char:, character names, or one continuous block as speaker prefixes.`;
   if (args.action === "edit" && args.selected.includes("system_prompt")) task += ` SYSTEM PROMPT HARD LIMIT: 2–6 short non-negotiable behavioral or formatting rules, approximately 30–100 tokens and never more than 650 characters. Do not place character facts, lore, voice, ordinary style guidance, examples, or jailbreak walls here. Return an empty string if no system-level rule is needed.`;
   if (args.action === "edit" && args.selected.includes("post_history_instructions")) task += ` POST-HISTORY HARD LIMIT: one concise reinforcement, never more than 350 characters; return an empty string if redundant.`;
@@ -153,9 +159,13 @@ For alternate greetings, return each exact dynamic key such as "alternate_greeti
   if (args.action === "edit" && !wantsBrief) {
     const incomplete = args.selected.filter(field => {
       const minimum = field.startsWith("alternate_greeting:") || field === "first_mes" ? 600
+        : field.startsWith("mes_example:") ? 120
         : ["description", "personality", "scenario", "mes_example"].includes(field) ? 500 : 0;
       const value = result.fields?.[field] ?? "";
-      const dialogueComplete = field !== "mes_example" || (
+      const dialogueComplete = !field.startsWith("mes_example:") && field !== "mes_example" || (
+        field.startsWith("mes_example:")
+          ? (value.match(/<START>/g) ?? []).length === 1 && value.includes("{{user}}:") && value.includes("{{char}}:")
+          :
         (value.match(/<START>/g) ?? []).length >= 3 &&
         value.includes("{{user}}:") && value.includes("{{char}}:")
       );
@@ -164,7 +174,7 @@ For alternate greetings, return each exact dynamic key such as "alternate_greeti
     if (incomplete.length) {
       const retry = await chat(
         args.baseUrl, args.model, common,
-        `The previous result was too short or incomplete for these fields: ${incomplete.map(fieldLabel).join(", ")}. Rewrite ONLY those exact keys as complete replacements. Each description/personality/scenario/mes_example must contain at least 500 characters; each first message or alternate greeting at least 600 characters. Every alternate greeting must naturally include {{user}}. Message examples require 3–5 separate blocks; each begins with <START> and contains literal {{user}}: and {{char}}: prefixes. Preserve the source field language unless translation was explicitly requested. Return strict JSON as {"fields":{"exact_key":"complete replacement"},"explanation":"..."}.\n\nPREVIOUS RESULT:\n${JSON.stringify(result)}\n\nCARD DATA:\n${payload}`
+        `The previous result was too short or incomplete for these fields: ${incomplete.map(fieldLabel).join(", ")}. Rewrite ONLY those exact keys as complete replacements. Each description/personality/scenario/mes_example must contain at least 500 characters; each first message or alternate greeting at least 600 characters. Every alternate greeting must naturally include {{user}}. A dynamic mes_example:N key is one independent block of at least 120 characters with exactly one <START> plus literal {{user}}: and {{char}}: prefixes; never merge its scene with another example. The legacy mes_example field requires 3–5 separate blocks. Preserve the source field language unless translation was explicitly requested. Return strict JSON as {"fields":{"exact_key":"complete replacement"},"explanation":"..."}.\n\nPREVIOUS RESULT:\n${JSON.stringify(result)}\n\nCARD DATA:\n${payload}`
       );
       try {
         const expanded = normalizeResult(extractJson(retry));

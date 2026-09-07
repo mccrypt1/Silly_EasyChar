@@ -5,6 +5,7 @@ import { embedCard, extractCard, imageAsPng } from "./png";
 import { loadDraftPortrait, saveDraftPortrait } from "./draft-image";
 import { formatElapsed, hallucinationDelay, LOADING_HALLUCINATIONS } from "./loading";
 import { improveStandaloneGreeting, models, runAi } from "./ai";
+import { emptyDialogueExample, joinDialogueExamples, splitDialogueExamples } from "./dialogue-examples";
 import { CardLibrary } from "./library";
 import { importCardParts, importPartLabels } from "./component-import";
 import type { ImportPart } from "./component-import";
@@ -23,11 +24,11 @@ const textFields: { key: CoreEditableField; label: string; rows: number; hint: s
   { key: "post_history_instructions", label: "Post-History Instructions", rows: 4, hint: "Optional: spät injizierte Anweisungen …" }
 ];
 
-const aiFields = textFields.filter(field => field.key !== "creator_notes");
+const aiFields = textFields.filter(field => field.key !== "mes_example");
 let card = loadDraft();
 let imageBuffer: ArrayBuffer | null = null;
 let imageUrl = "";
-let activeField: CoreEditableField = "description";
+let activeField: EditableField = "description";
 let selected = new Set<EditableField>(["description", "personality", "scenario", "first_mes"]);
 let nsfwEnabled = localStorage.getItem("nsfwEnabled") !== "false";
 let optimizeStrength = (localStorage.getItem("optimizeStrength") as "gentle"|"balanced"|"strong") || "balanced";
@@ -188,9 +189,15 @@ function storeCardGreetingsInLibrary(source: CharacterCard): number {
 }
 function reconcileSelectedFields() {
   selected = new Set([...selected].filter(key => {
-    if (!key.startsWith("alternate_greeting:")) return aiFields.some(field => field.key === key);
-    const index = Number(key.split(":")[1]);
-    return Number.isInteger(index) && index >= 0 && index < card.data.alternate_greetings.length;
+    if (key.startsWith("alternate_greeting:")) {
+      const index = Number(key.split(":")[1]);
+      return Number.isInteger(index) && index >= 0 && index < card.data.alternate_greetings.length;
+    }
+    if (key.startsWith("mes_example:")) {
+      const index = Number(key.split(":")[1]);
+      return Number.isInteger(index) && index >= 0 && index < splitDialogueExamples(card.data.mes_example).length;
+    }
+    return aiFields.some(field => field.key === key) || key === "mes_example";
   }));
 }
 function syncSelectionHighlights() {
@@ -211,30 +218,85 @@ function renderFields() {
     const optimize = f.key === "creator_notes" ? "" : `<button class="field-optimize" data-optimize-one="${f.key}" title="Nur dieses Feld kompakter machen">Token sparen</button>`;
     return `<article class="field ${activeField === f.key ? "focused" : ""} ${selected.has(f.key) ? "selected-field" : ""}" data-key="${f.key}" data-selection-key="${f.key}"><div class="field-head"><label>${f.label}</label><div>${optimize}<span>${value.length} Zeichen</span></div></div>${f.rows === 1 ? `<input data-field="${f.key}" value="${escapeAttr(value)}" placeholder="${escapeAttr(f.hint)}" />` : `<textarea data-field="${f.key}" rows="${f.rows}" placeholder="${escapeAttr(f.hint)}">${escapeHtml(value)}</textarea>`}</article>`;
   }).join("");
-  const afterGreetings = textFields.findIndex(field => field.key === "creator_notes");
-  $("#fields").innerHTML = markup(textFields.slice(0, afterGreetings));
-  $("#fieldsAfterGreetings").innerHTML = markup(textFields.slice(afterGreetings));
+  const greetingPosition = textFields.findIndex(field => field.key === "mes_example");
+  $("#fields").innerHTML = markup(textFields.slice(0, greetingPosition));
+  $("#fieldsAfterGreetings").innerHTML = renderDialogueExamples() + markup(textFields.slice(greetingPosition + 1));
   document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("[data-field]").forEach(el => {
     el.addEventListener("focus", () => { activeField = el.dataset.field as CoreEditableField; document.querySelectorAll(".field").forEach(n => n.classList.toggle("focused", (n as HTMLElement).dataset.key === activeField)); });
     el.addEventListener("input", () => { card.data[el.dataset.field as CoreEditableField] = el.value; el.closest(".field")!.querySelector("span")!.textContent = `${el.value.length} Zeichen`; changed(); });
     el.addEventListener("change", () => { const value = normalizePlaceholders(el.value); if (value !== el.value) { el.value = value; card.data[el.dataset.field as CoreEditableField] = value; changed(); } });
   });
   document.querySelectorAll<HTMLButtonElement>("[data-optimize-one]").forEach(button => button.onclick = () => void ai("optimize", [button.dataset.optimizeOne as CoreEditableField]));
+  bindDialogueExamples();
 }
 function greetingField(index: number): EditableField { return `alternate_greeting:${index}`; }
+function dialogueField(index: number): EditableField { return `mes_example:${index}`; }
+function renderDialogueExamples(): string {
+  const examples = splitDialogueExamples(card.data.mes_example);
+  const items = examples.map((example, index) => {
+    const key = dialogueField(index);
+    return `<article class="field dialogue-example ${activeField === key ? "focused" : ""} ${selected.has(key) ? "selected-field" : ""}" data-key="${key}" data-selection-key="${key}"><div class="field-head"><label>Dialogbeispiel ${index + 1}</label><div><button class="field-optimize" data-optimize-dialogue="${index}" title="Nur dieses Dialogbeispiel kompakter machen">Token sparen</button><span>${example.length} Zeichen</span><button class="dialogue-remove" data-remove-dialogue="${index}" title="Dialogbeispiel entfernen">×</button></div></div><textarea rows="7" data-dialogue="${index}" placeholder="<START>\n{{user}}: …\n{{char}}: …">${escapeHtml(example)}</textarea></article>`;
+  }).join("");
+  return `<section class="dialogue-editor"><div class="field-head dialogue-editor-head"><label>Dialogbeispiele</label><button id="addDialogueExample" class="mini">＋ Dialogbeispiel hinzufügen</button></div><p class="muted">Jeder &lt;START&gt;-Block bleibt separat bearbeitbar und wird auch einzeln an Ollama gesendet.</p><div id="dialogueExamples">${items || `<p class="muted">Noch keine Dialogbeispiele.</p>`}</div></section>`;
+}
+function reindexDynamicSelection(prefix: "alternate_greeting" | "mes_example", removedIndex: number) {
+  const next = new Set<EditableField>();
+  for (const key of selected) {
+    if (!key.startsWith(prefix + ":")) { next.add(key); continue; }
+    const oldIndex = Number(key.split(":")[1]);
+    if (oldIndex < removedIndex) next.add(key);
+    else if (oldIndex > removedIndex) next.add(`${prefix}:${oldIndex - 1}` as EditableField);
+  }
+  selected = next;
+}
+function bindDialogueExamples() {
+  const readEditors = () => [...document.querySelectorAll<HTMLTextAreaElement>("[data-dialogue]")]
+    .sort((a, b) => Number(a.dataset.dialogue) - Number(b.dataset.dialogue))
+    .map(element => element.value);
+  document.querySelectorAll<HTMLTextAreaElement>("[data-dialogue]").forEach(element => {
+    element.onfocus = () => { activeField = dialogueField(Number(element.dataset.dialogue)); document.querySelectorAll(".field").forEach(node => node.classList.toggle("focused", (node as HTMLElement).dataset.key === activeField)); };
+    element.oninput = () => {
+      card.data.mes_example = joinDialogueExamples(readEditors());
+      element.closest(".field")!.querySelector("span")!.textContent = `${element.value.length} Zeichen`;
+      changed();
+    };
+    element.onchange = () => {
+      const value = normalizePlaceholders(element.value);
+      element.value = value;
+      card.data.mes_example = joinDialogueExamples(readEditors());
+      changed();
+    };
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-optimize-dialogue]").forEach(button => button.onclick = () => void ai("optimize", [dialogueField(Number(button.dataset.optimizeDialogue))]));
+  document.querySelectorAll<HTMLButtonElement>("[data-remove-dialogue]").forEach(button => button.onclick = () => {
+    const index = Number(button.dataset.removeDialogue);
+    const examples = splitDialogueExamples(card.data.mes_example);
+    examples.splice(index, 1);
+    card.data.mes_example = joinDialogueExamples(examples);
+    reindexDynamicSelection("mes_example", index);
+    renderFields(); renderChecks(); changed();
+  });
+  const addButton = document.querySelector<HTMLButtonElement>("#addDialogueExample");
+  if (addButton) addButton.onclick = () => {
+    const examples = splitDialogueExamples(card.data.mes_example);
+    const index = examples.push(emptyDialogueExample()) - 1;
+    card.data.mes_example = joinDialogueExamples(examples);
+    selected.add(dialogueField(index));
+    renderFields(); renderChecks(); changed();
+  };
+}
 function renderChecks() {
-  const core = aiFields.map(f => `<label class="check"><input type="checkbox" data-check="${f.key}" ${selected.has(f.key) ? "checked" : ""}/><span>${f.label}</span></label>`).join("");
+  const tailPosition = aiFields.findIndex(field => field.key === "creator_notes");
+  const checks = (fields: typeof aiFields) => fields.map(f => `<label class="check"><input type="checkbox" data-check="${f.key}" ${selected.has(f.key) ? "checked" : ""}/><span>${f.label}</span></label>`).join("");
+  const core = checks(aiFields.slice(0, tailPosition));
   const greetings = card.data.alternate_greetings.map((_, index) => { const key = greetingField(index); return `<label class="check"><input type="checkbox" data-check="${key}" ${selected.has(key) ? "checked" : ""}/><span>Alternative Begrüßung ${index + 1}</span></label>`; }).join("");
-  $("#fieldChecks").innerHTML = core + greetings;
+  const dialogues = splitDialogueExamples(card.data.mes_example).map((_, index) => { const key = dialogueField(index); return `<label class="check"><input type="checkbox" data-check="${key}" ${selected.has(key) ? "checked" : ""}/><span>Dialogbeispiel ${index + 1}</span></label>`; }).join("");
+  const tail = checks(aiFields.slice(tailPosition));
+  $("#fieldChecks").innerHTML = core + greetings + dialogues + tail;
   document.querySelectorAll<HTMLInputElement>("[data-check]").forEach(c => c.onchange = () => { const k = c.dataset.check as EditableField; c.checked ? selected.add(k) : selected.delete(k); syncSelectionHighlights(); });
 }
 function removeGreeting(index: number) {
-  const next = new Set<EditableField>();
-  for (const key of selected) {
-    if (!key.startsWith("alternate_greeting:")) next.add(key);
-    else { const oldIndex = Number(key.split(":")[1]); if (oldIndex < index) next.add(key); else if (oldIndex > index) next.add(greetingField(oldIndex - 1)); }
-  }
-  selected = next;
+  reindexDynamicSelection("alternate_greeting", index);
   card.data.alternate_greetings.splice(index, 1);
   renderExtras(); renderChecks(); changed();
 }
@@ -423,10 +485,12 @@ async function openCrop(buffer: ArrayBuffer) {
 
 function fieldValue(key: EditableField): string {
   if (key.startsWith("alternate_greeting:")) return card.data.alternate_greetings[Number(key.split(":")[1])] ?? "";
+  if (key.startsWith("mes_example:")) return splitDialogueExamples(card.data.mes_example)[Number(key.split(":")[1])] ?? "";
   const value = card.data[key as CoreEditableField]; return typeof value === "string" ? value : "";
 }
 function fieldTitle(key: EditableField): string {
   if (key.startsWith("alternate_greeting:")) return "Alternative Begrüßung " + (Number(key.split(":")[1]) + 1);
+  if (key.startsWith("mes_example:")) return "Dialogbeispiel " + (Number(key.split(":")[1]) + 1);
   return textFields.find(field => field.key === key)?.label ?? key;
 }
 function startThinking(host: HTMLElement, label: string, hideWhenDone = false) {
@@ -650,15 +714,20 @@ async function ai(action: "edit"|"translate"|"suggest"|"grade"|"lorebook"|"optim
 }
 function applyAiResult(r: AiResult, action: string, allowedFields = selected) {
   if(r.fields){
+    const dialogueExamples=splitDialogueExamples(card.data.mes_example);
     for(const [key,value] of Object.entries(r.fields)){
       if(typeof value!=="string" || !allowedFields.has(key as EditableField)) continue;
       if(key.startsWith("alternate_greeting:")){
         const index=Number(key.split(":")[1]);
         if(Number.isInteger(index) && index>=0 && index<card.data.alternate_greetings.length) card.data.alternate_greetings[index]=value;
+      } else if(key.startsWith("mes_example:")){
+        const index=Number(key.split(":")[1]);
+        if(Number.isInteger(index) && index>=0 && index<dialogueExamples.length) dialogueExamples[index]=value;
       } else {
         card.data[key as CoreEditableField]=value;
       }
     }
+    card.data.mes_example=joinDialogueExamples(dialogueExamples);
     renderFields(); renderExtras(); renderChecks(); changed();
   }
   if(r.score){ score=r.score; renderScore(r.score); }
@@ -752,7 +821,7 @@ $("#pngBtn").onclick=async()=>{
   } catch(error) { toast(error instanceof Error ? error.message : String(error), true); }
 };
 $("#refreshModels").onclick=async()=>{const url=($(`#ollamaUrl`) as HTMLInputElement).value;localStorage.setItem("ollamaUrl",url);const sel=$(`#model`) as HTMLSelectElement;sel.innerHTML=`<option>Lädt …</option>`;try{const list=await models(url);sel.innerHTML=list.map(m=>`<option>${escapeHtml(m)}</option>`).join("")||`<option value="">Keine Modelle gefunden</option>`;const last=localStorage.getItem("model");if(last&&list.includes(last))sel.value=last;toast(`${list.length} Ollama-Modelle gefunden.`);}catch(e){sel.innerHTML=`<option value="">Ollama nicht erreichbar</option>`;toast(e instanceof Error?e.message:String(e),true);}};
-$("#model").onchange=e=>localStorage.setItem("model",(e.target as HTMLSelectElement).value); $("#allFields").onclick=()=>{selected=new Set<EditableField>([...aiFields.map(x=>x.key),...card.data.alternate_greetings.map((_,index)=>greetingField(index))]);renderChecks();syncSelectionHighlights();};
+$("#model").onchange=e=>localStorage.setItem("model",(e.target as HTMLSelectElement).value); $("#allFields").onclick=()=>{selected=new Set<EditableField>([...aiFields.map(x=>x.key),...card.data.alternate_greetings.map((_,index)=>greetingField(index)),...splitDialogueExamples(card.data.mes_example).map((_,index)=>dialogueField(index))]);renderChecks();syncSelectionHighlights();};
 $("#editAi").onclick=()=>ai("edit"); document.querySelectorAll<HTMLButtonElement>("[data-ai]").forEach(b=>b.onclick=()=>ai(b.dataset.ai as any));
 $("#addGreeting").onclick=()=>{const index=card.data.alternate_greetings.push("")-1;selected.add(greetingField(index));renderExtras();renderChecks();changed();};
 $("#importGreetings").onclick=()=>openComponentPicker("greetings");

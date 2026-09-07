@@ -65,7 +65,7 @@ export type CoreEditableField = keyof Pick<CharacterData,
   "name" | "description" | "personality" | "scenario" | "first_mes" | "mes_example" |
   "creator_notes" | "system_prompt" | "post_history_instructions">;
 
-export type EditableField = CoreEditableField | `alternate_greeting:${number}`;
+export type EditableField = CoreEditableField | `alternate_greeting:${number}` | `mes_example:${number}`;
 
 export interface AiResult {
   fields?: Partial<Record<EditableField, string>>;
