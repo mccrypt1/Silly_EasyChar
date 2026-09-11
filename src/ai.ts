@@ -142,6 +142,7 @@ export async function runAi(args: {
   baseUrl: string; model: string; action: "edit" | "translate" | "suggest" | "grade" | "lorebook" | "optimize";
   card: CharacterCard; selected: EditableField[]; instruction: string; language: string; nsfw: boolean;
   optimizationStrength?: "gentle" | "balanced" | "strong";
+  selectionMode?: boolean;
 }): Promise<AiResult> {
   if (!args.model) throw new Error("Bitte zuerst ein Ollama-Modell auswählen.");
   const adult = args.nsfw
@@ -165,6 +166,7 @@ Return ONLY strict, parseable JSON with double-quoted property names and escaped
 Create substantially expanded, complete replacements in one pass instead of merely appending a few sentences. Unless the user requests brevity, aim for roughly 500–1200 characters each for description/personality/scenario, 600–1600 for first_mes, and 3–5 varied exchanges only when editing the legacy combined mes_example field. Keep the name concise. Use all useful facts already present, add fitting detail without contradictions, and distribute information into its semantically correct field; never stuff personality, scenario, examples, or instructions into description.
 Preserve the existing language of each non-empty source field. The configured output language applies only to explanations and newly created empty fields. Never translate an edited field unless the user explicitly requests translation.
 For alternate greetings, return each exact dynamic key such as "alternate_greeting:0" separately. Each alternate greeting must be a complete 600–1600 character roleplay opening with atmosphere, visible action, a distinct situation, a clear conversation hook, and at least one natural {{user}} reference; never decide {{user}}'s response or actions. Return {"fields":{"field":"complete replacement"},"explanation":"short summary in ${args.language}"}.`;
+  if (args.action === "edit" && args.selectionMode) task = `Edit ONLY the supplied selected passage for ${selected}. User request: ${args.instruction || "Improve clarity and style."} Return the replacement passage only under the exact same field key. Preserve its language, facts, placeholders, surrounding grammatical compatibility, and approximate scope. Do not expand it into a complete card field. Return {"fields":{"field":"replacement passage"},"explanation":"short summary in ${args.language}"}.`;
   if (args.action === "edit" && args.selected.some(field => field.startsWith("mes_example:"))) task += ` Each selected mes_example:N key is exactly one independent dialogue example. Return the same exact dynamic key, begin it with exactly one <START> line, include literal {{user}}: and {{char}}: prefixes, and keep its scene, mood, and nuance independent from every other example. Never merge examples or return multiple <START> blocks for one key.`;
   if (args.action === "edit" && args.selected.includes("mes_example")) task += ` Every separate dialogue example must begin with <START> on its own line, followed by at least one {{user}}: message and one {{char}}: message. Use the literal prefixes exactly, create 3–5 separate <START> blocks, and demonstrate the character voice, mannerisms, actions, and emotional range. Never use User:, Char:, character names, or one continuous block as speaker prefixes.`;
   if (args.action === "edit" && args.selected.includes("system_prompt")) task += ` SYSTEM PROMPT HARD LIMIT: 2–6 short non-negotiable behavioral or formatting rules, approximately 30–100 tokens and never more than 650 characters. Do not place character facts, lore, voice, ordinary style guidance, examples, or jailbreak walls here. Return an empty string if no system-level rule is needed.`;
@@ -191,7 +193,7 @@ For alternate greetings, return each exact dynamic key such as "alternate_greeti
     }
   }
   const wantsBrief = /\b(kurz|knapp|short|brief|concise)\b/iu.test(args.instruction);
-  if (args.action === "edit" && !wantsBrief) {
+  if (args.action === "edit" && !wantsBrief && !args.selectionMode) {
     const incomplete = args.selected.filter(field => {
       const minimum = field.startsWith("alternate_greeting:") || field === "first_mes" ? 600
         : field.startsWith("mes_example:") ? 120
@@ -218,7 +220,7 @@ For alternate greetings, return each exact dynamic key such as "alternate_greeti
       } catch { /* Keep the valid first result if the depth retry fails. */ }
     }
   }
-  if (args.action === "edit") {
+  if (args.action === "edit" && !args.selectionMode) {
     const oversized = args.selected.filter(field => {
       const value = result.fields?.[field] ?? "";
       return (field === "system_prompt" && value.length > 650) || (field === "post_history_instructions" && value.length > 350);

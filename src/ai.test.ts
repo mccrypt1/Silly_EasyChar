@@ -155,5 +155,17 @@ describe("Ollama result handling", () => {
     expect(request.prompt).not.toContain("creator_notes");
     expect(request.prompt).not.toContain("alternate_greetings");
   });
+
+  it("edits a selected passage without forcing a complete field rewrite", async () => {
+    const invoke = vi.fn().mockResolvedValue('{"fields":{"description":"a tighter sentence"}}');
+    vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });
+    const card = emptyCard(); card.data.description = "a verbose sentence";
+    const result = await runAi({ baseUrl: "http://127.0.0.1:11434", model: "test", action: "edit", card, selected: ["description"], instruction: "make it clearer", language: "English", nsfw: false, selectionMode: true });
+    expect(result.fields?.description).toBe("a tighter sentence");
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const request = invoke.mock.calls[0][1] as { prompt: string };
+    expect(request.prompt).toContain("selected passage");
+    expect(request.prompt).toContain("Do not expand it into a complete card field");
+  });
 });
 
