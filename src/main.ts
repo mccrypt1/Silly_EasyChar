@@ -40,6 +40,8 @@ type GreetingLibraryEntry = { id: string; title: string; text: string; createdAt
 let greetingLibrary: GreetingLibraryEntry[] = loadGreetingLibrary();
 let pendingGreetingImports: { title: string; text: string; selected: boolean }[] = [];
 let editingGreetingId: string | null = null;
+let greetingImprovementOriginal = "";
+let greetingImprovementGenerated = "";
 let aiBusy = false;
 let statusTimer = 0;
 let linkedPath: string | null = null;
@@ -142,6 +144,7 @@ app.innerHTML = `
     <label>Optionaler Auftrag für Ollama<textarea id="greetingEditorInstruction" rows="3" placeholder="z. B. atmosphärischer, natürlicher und ausführlicher formulieren …"></textarea></label>
     <p class="privacy-note">Ollama erhält hierbei ausschließlich diese Begrüßung und den Auftrag – keine Daten der aktuell geöffneten Karte.</p>
     <div class="modal-actions"><button id="deleteGreetingEditor" class="danger-button">Löschen</button><button id="useGreetingEditor" class="ghost">Zur Karte hinzufügen</button><button id="improveGreetingEditor" class="ghost">✦ Isoliert mit Ollama verbessern</button><button id="saveGreetingEditor" class="primary">Änderungen speichern</button></div>
+    <section id="greetingImprovementProposal" class="greeting-improvement-proposal hidden"><div class="field-head"><div><b>Ollama-Vorschlag</b><small>Der gespeicherte Begrüßungstext wurde noch nicht verändert.</small></div><button id="discardGreetingProposal" class="link">Vorschlag schließen</button></div><textarea id="greetingProposalText" rows="12" aria-label="Bearbeitbarer Ollama-Vorschlag"></textarea><div class="proposal-actions"><button id="restoreGeneratedGreeting" class="ghost">KI-Vorschlag zurücksetzen</button><button id="restoreOriginalGreeting" class="ghost">Original wiederherstellen</button><button id="acceptGreetingProposal" class="primary">Vorschlag übernehmen</button></div></section>
     <div id="greetingEditorThinking" class="hidden"></div>
   </div></div>
   <div id="cropModal" class="modal crop-modal hidden"><div class="crop-card"><div class="field-head"><h3>Portrait zuschneiden</h3><button id="closeCrop">×</button></div><p>Bild verschieben und mit dem Regler zoomen. Der Export wird als 4:5-PNG mit 768 × 960 Pixeln gespeichert.</p><canvas id="cropCanvas" width="768" height="960"></canvas><label>Zoom<input id="cropZoom" type="range" min="1" max="3" step="0.01" value="1" /></label><div class="crop-actions"><button id="cropOriginal" class="ghost">Original verwenden</button><button id="applyCrop" class="primary">Zuschnitt übernehmen</button></div></div></div>
@@ -387,11 +390,16 @@ function openGreetingEditor(id: string) {
   ($("#greetingEditorTitle") as HTMLInputElement).value = entry.title;
   ($("#greetingEditorText") as HTMLTextAreaElement).value = entry.text;
   ($("#greetingEditorInstruction") as HTMLTextAreaElement).value = "";
+  greetingImprovementOriginal = "";
+  greetingImprovementGenerated = "";
+  $("#greetingImprovementProposal").classList.add("hidden");
   $("#greetingEditorModal").classList.remove("hidden");
 }
 function closeGreetingEditor() {
   $("#greetingEditorModal").classList.add("hidden");
   editingGreetingId = null;
+  greetingImprovementOriginal = "";
+  greetingImprovementGenerated = "";
 }
 
 function renderLore() {
@@ -765,6 +773,27 @@ $("#useGreetingEditor").onclick=()=>{
   if(!text){toast("Die Begrüßung ist leer.",true);return;}
   addGreetingFromLibrary(text);
 };
+$("#acceptGreetingProposal").onclick=()=>{
+  const proposal=normalizePlaceholders(($("#greetingProposalText") as HTMLTextAreaElement).value.trim());
+  if(!proposal){toast("Der Vorschlag darf nicht leer sein.",true);return;}
+  ($("#greetingEditorText") as HTMLTextAreaElement).value=proposal;
+  toast("Bearbeiteter Vorschlag übernommen. Zum dauerhaften Speichern noch Änderungen speichern.");
+};
+$("#restoreGeneratedGreeting").onclick=()=>{
+  if(!greetingImprovementGenerated)return;
+  ($("#greetingProposalText") as HTMLTextAreaElement).value=greetingImprovementGenerated;
+  toast("Bearbeitungen am Vorschlag zurückgesetzt.");
+};
+$("#restoreOriginalGreeting").onclick=()=>{
+  if(!greetingImprovementOriginal)return;
+  ($("#greetingEditorText") as HTMLTextAreaElement).value=greetingImprovementOriginal;
+  toast("Ursprüngliche Begrüßung wiederhergestellt.");
+};
+$("#discardGreetingProposal").onclick=()=>{
+  $("#greetingImprovementProposal").classList.add("hidden");
+  greetingImprovementOriginal="";
+  greetingImprovementGenerated="";
+};
 $("#suggestGreetingTitle").onclick=async()=>{
   const button=$("#suggestGreetingTitle") as HTMLButtonElement;
   const text=($("#greetingEditorText") as HTMLTextAreaElement).value;
@@ -800,8 +829,11 @@ $("#improveGreetingEditor").onclick=async()=>{
       language:($("#language") as HTMLSelectElement).value,
       nsfw:nsfwEnabled
     });
-    ($("#greetingEditorText") as HTMLTextAreaElement).value=improved;
-    toast("Vorschlag eingesetzt. Bitte prüfen und speichern.");
+    greetingImprovementOriginal=text;
+    greetingImprovementGenerated=improved;
+    ($("#greetingProposalText") as HTMLTextAreaElement).value=improved;
+    $("#greetingImprovementProposal").classList.remove("hidden");
+    toast("Vorschlag erstellt. Originaltext blieb unverändert.");
   }catch(error){
     recordTechnicalError("greeting_library_improve",error);
     toast(error instanceof Error?error.message:String(error),true);
