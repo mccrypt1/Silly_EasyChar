@@ -32,6 +32,8 @@ let activeField: EditableField = "description";
 let selected = new Set<EditableField>(["description", "personality", "scenario", "first_mes"]);
 let nsfwEnabled = localStorage.getItem("nsfwEnabled") !== "false";
 let optimizeStrength = (localStorage.getItem("optimizeStrength") as "gentle"|"balanced"|"strong") || "balanced";
+let optimizeWizardStep: 0 | 1 = 0;
+let optimizeWizardFields = new Set<EditableField>();
 let componentSource: CharacterCard | null = null;
 let componentImportMode: "greetings" | "parts" | "library" = "parts";
 let wizardMode: "new" | "review" | null = null;
@@ -126,6 +128,10 @@ app.innerHTML = `
     <label>Stärke der Token-Kürzung<select id="optimizeStrength"><option value="gentle">Behutsam · mehr Details behalten</option><option value="balanced">Ausgewogen</option><option value="strong">Stark · maximal kompakt</option></select></label>
     <label class="settings-toggle"><span><b>NSFW-Verarbeitung</b><small>Erwachsene fiktionale Inhalte bei lokalen Ollama-Aktionen erhalten.</small></span><input id="nsfwSetting" type="checkbox" /><i></i></label>
     <details><summary>Hilfe</summary><div class="settings-help"><p><b>Token minimieren</b> kürzt einzelne oder alle ausgewählten Felder. Jede Änderung erscheint vor der Übernahme im Prüffenster.</p><p><b>Fehlerprotokoll</b> enthält nur Zeitpunkt, Programmversion, Vorgang und technischen Fehlercode – niemals Kartenfelder, Prompts oder Notizen.</p><p>Protokoll: <code id="errorLogPath">Wird ermittelt …</code></p></div></details>
+  </div></div>
+  <div id="optimizeWizardModal" class="modal hidden"><div class="modal-card optimize-wizard-modal"><div class="field-head"><h3>Token minimieren</h3><button id="closeOptimizeWizard">×</button></div><div class="optimize-wizard-progress"><span id="optimizeWizardCount">Schritt 1 von 2</span><i><b id="optimizeWizardBar"></b></i></div>
+    <section id="optimizeWizardFields"><h4>Welche Felder sollen optimiert werden?</h4><p>Nur markierte Felder werden einzeln an Ollama gesendet. Vor der Übernahme erscheint weiterhin der Vergleich.</p><div id="optimizeFieldChoices" class="optimize-field-choices"></div><div class="modal-actions"><button id="cancelOptimizeWizard" class="ghost">Abbrechen</button><button id="nextOptimizeWizard" class="primary">Weiter →</button></div></section>
+    <section id="optimizeWizardStrength" class="hidden"><h4>Wie stark soll gekürzt werden?</h4><p>Die Stärke gilt für alle ausgewählten Felder. Einzigartige Informationen und Platzhalter sollen erhalten bleiben.</p><div class="optimize-strength-choices"><label><input type="radio" name="optimizeWizardStrength" value="gentle"/><span><b>Behutsam</b><small>Mehr Details behalten, vor allem Wiederholungen entfernen.</small></span></label><label><input type="radio" name="optimizeWizardStrength" value="balanced"/><span><b>Ausgewogen</b><small>Deutlich kürzen, ohne die Identität auszudünnen.</small></span></label><label><input type="radio" name="optimizeWizardStrength" value="strong"/><span><b>Stark</b><small>Maximal kompakte Felder für knappen Kontext.</small></span></label></div><div class="optimize-summary" id="optimizeSummary"></div><div class="modal-actions"><button id="backOptimizeWizard" class="ghost">← Zurück</button><button id="startOptimizeWizard" class="primary">Optimierung starten</button></div></section>
   </div></div>
   <div id="componentModal" class="modal hidden"><div class="modal-card component-modal"><div class="field-head"><h3>Kartenbestandteile importieren</h3><button id="closeComponentImport">×</button></div><p id="componentSourceName"></p><p>Textfelder ersetzen den aktuellen Inhalt. Begrüßungen und Lorebook-Einträge werden hinzugefügt, Tags werden zusammengeführt.</p><div id="componentChecks" class="component-checks"></div><button id="applyComponentImport" class="primary wide">Ausgewählte Bestandteile importieren</button></div></div>
   <div id="wizardModeModal" class="modal hidden"><div class="modal-card wizard-mode-modal"><div class="field-head"><h3>Wizard starten</h3><button id="closeWizardMode">×</button></div><p>Wie möchtest du den Schritt-für-Schritt-Wizard verwenden?</p><div class="wizard-mode-actions"><button id="wizardReviewMode" class="primary"><b>Vorhandene Karte prüfen</b><small>Aktuelle Inhalte laden und Feld für Feld überarbeiten.</small></button><button id="wizardNewMode" class="ghost"><b>Neue Karte erstellen</b><small>Aktuelle Karte verwerfen und mit einem leeren Wizard beginnen.</small></button></div></div></div>
@@ -229,7 +235,7 @@ function renderFields() {
     el.addEventListener("input", () => { card.data[el.dataset.field as CoreEditableField] = el.value; el.closest(".field")!.querySelector("span")!.textContent = `${el.value.length} Zeichen`; changed(); });
     el.addEventListener("change", () => { const value = normalizePlaceholders(el.value); if (value !== el.value) { el.value = value; card.data[el.dataset.field as CoreEditableField] = value; changed(); } });
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-optimize-one]").forEach(button => button.onclick = () => void ai("optimize", [button.dataset.optimizeOne as CoreEditableField]));
+  document.querySelectorAll<HTMLButtonElement>("[data-optimize-one]").forEach(button => button.onclick = () => openOptimizeWizard([button.dataset.optimizeOne as CoreEditableField]));
   bindDialogueExamples();
 }
 function greetingField(index: number): EditableField { return `alternate_greeting:${index}`; }
@@ -270,7 +276,7 @@ function bindDialogueExamples() {
       changed();
     };
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-optimize-dialogue]").forEach(button => button.onclick = () => void ai("optimize", [dialogueField(Number(button.dataset.optimizeDialogue))]));
+  document.querySelectorAll<HTMLButtonElement>("[data-optimize-dialogue]").forEach(button => button.onclick = () => openOptimizeWizard([dialogueField(Number(button.dataset.optimizeDialogue))]));
   document.querySelectorAll<HTMLButtonElement>("[data-remove-dialogue]").forEach(button => button.onclick = () => {
     const index = Number(button.dataset.removeDialogue);
     const examples = splitDialogueExamples(card.data.mes_example);
@@ -289,13 +295,7 @@ function bindDialogueExamples() {
   };
 }
 function renderChecks() {
-  const tailPosition = aiFields.findIndex(field => field.key === "creator_notes");
-  const checks = (fields: typeof aiFields) => fields.map(f => `<label class="check"><input type="checkbox" data-check="${f.key}" ${selected.has(f.key) ? "checked" : ""}/><span>${f.label}</span></label>`).join("");
-  const core = checks(aiFields.slice(0, tailPosition));
-  const greetings = card.data.alternate_greetings.map((_, index) => { const key = greetingField(index); return `<label class="check"><input type="checkbox" data-check="${key}" ${selected.has(key) ? "checked" : ""}/><span>Alternative Begrüßung ${index + 1}</span></label>`; }).join("");
-  const dialogues = splitDialogueExamples(card.data.mes_example).map((_, index) => { const key = dialogueField(index); return `<label class="check"><input type="checkbox" data-check="${key}" ${selected.has(key) ? "checked" : ""}/><span>Dialogbeispiel ${index + 1}</span></label>`; }).join("");
-  const tail = checks(aiFields.slice(tailPosition));
-  $("#fieldChecks").innerHTML = core + greetings + dialogues + tail;
+  $("#fieldChecks").innerHTML = orderedEditableFields().map(field => `<label class="check"><input type="checkbox" data-check="${field.key}" ${selected.has(field.key) ? "checked" : ""}/><span>${escapeHtml(field.label)}</span></label>`).join("");
   document.querySelectorAll<HTMLInputElement>("[data-check]").forEach(c => c.onchange = () => { const k = c.dataset.check as EditableField; c.checked ? selected.add(k) : selected.delete(k); syncSelectionHighlights(); });
 }
 function removeGreeting(index: number) {
@@ -400,6 +400,49 @@ function closeGreetingEditor() {
   editingGreetingId = null;
   greetingImprovementOriginal = "";
   greetingImprovementGenerated = "";
+}
+function orderedEditableFields(): { key: EditableField; label: string }[] {
+  const tailPosition = aiFields.findIndex(field => field.key === "creator_notes");
+  return [
+    ...aiFields.slice(0, tailPosition).map(field => ({ key: field.key as EditableField, label: field.label })),
+    ...card.data.alternate_greetings.map((_, index) => ({ key: greetingField(index), label: `Alternative Begrüßung ${index + 1}` })),
+    ...splitDialogueExamples(card.data.mes_example).map((_, index) => ({ key: dialogueField(index), label: `Dialogbeispiel ${index + 1}` })),
+    ...aiFields.slice(tailPosition).map(field => ({ key: field.key as EditableField, label: field.label }))
+  ];
+}
+
+function closeOptimizeWizard() {
+  $("#optimizeWizardModal").classList.add("hidden");
+}
+
+function renderOptimizeWizard() {
+  const strengthStep = optimizeWizardStep === 1;
+  $("#optimizeWizardFields").classList.toggle("hidden", strengthStep);
+  $("#optimizeWizardStrength").classList.toggle("hidden", !strengthStep);
+  $("#optimizeWizardCount").textContent = `Schritt ${strengthStep ? 2 : 1} von 2`;
+  ($("#optimizeWizardBar") as HTMLElement).style.width = strengthStep ? "100%" : "50%";
+  if (!strengthStep) {
+    $("#optimizeFieldChoices").innerHTML = orderedEditableFields().map(field => `<label class="check"><input type="checkbox" data-optimize-field="${field.key}" ${optimizeWizardFields.has(field.key) ? "checked" : ""}/><span>${escapeHtml(field.label)}</span></label>`).join("");
+    document.querySelectorAll<HTMLInputElement>("[data-optimize-field]").forEach(input => input.onchange = () => {
+      const key = input.dataset.optimizeField as EditableField;
+      input.checked ? optimizeWizardFields.add(key) : optimizeWizardFields.delete(key);
+    });
+  } else {
+    const radio = document.querySelector<HTMLInputElement>(`input[name="optimizeWizardStrength"][value="${optimizeStrength}"]`);
+    if (radio) radio.checked = true;
+    const labels = orderedEditableFields().filter(field => optimizeWizardFields.has(field.key)).map(field => field.label);
+    $("#optimizeSummary").textContent = `${labels.length} Feld${labels.length === 1 ? "" : "er"}: ${labels.join(", ")}`;
+  }
+}
+
+function openOptimizeWizard(initialFields?: EditableField[]) {
+  reconcileSelectedFields();
+  const available = new Set(orderedEditableFields().map(field => field.key));
+  const seed = initialFields ?? [...selected];
+  optimizeWizardFields = new Set(seed.filter(field => available.has(field)));
+  optimizeWizardStep = 0;
+  renderOptimizeWizard();
+  $("#optimizeWizardModal").classList.remove("hidden");
 }
 
 function renderLore() {
@@ -874,7 +917,7 @@ $("#pngBtn").onclick=async()=>{
 };
 $("#refreshModels").onclick=async()=>{const url=($(`#ollamaUrl`) as HTMLInputElement).value;localStorage.setItem("ollamaUrl",url);const sel=$(`#model`) as HTMLSelectElement;sel.innerHTML=`<option>Lädt …</option>`;try{const list=await models(url);sel.innerHTML=list.map(m=>`<option>${escapeHtml(m)}</option>`).join("")||`<option value="">Keine Modelle gefunden</option>`;const last=localStorage.getItem("model");if(last&&list.includes(last))sel.value=last;toast(`${list.length} Ollama-Modelle gefunden.`);}catch(e){sel.innerHTML=`<option value="">Ollama nicht erreichbar</option>`;toast(e instanceof Error?e.message:String(e),true);}};
 $("#model").onchange=e=>localStorage.setItem("model",(e.target as HTMLSelectElement).value); $("#allFields").onclick=()=>{selected=new Set<EditableField>([...aiFields.map(x=>x.key),...card.data.alternate_greetings.map((_,index)=>greetingField(index)),...splitDialogueExamples(card.data.mes_example).map((_,index)=>dialogueField(index))]);renderChecks();syncSelectionHighlights();};
-$("#editAi").onclick=()=>ai("edit"); document.querySelectorAll<HTMLButtonElement>("[data-ai]").forEach(b=>b.onclick=()=>ai(b.dataset.ai as any));
+$("#editAi").onclick=()=>ai("edit"); document.querySelectorAll<HTMLButtonElement>("[data-ai]").forEach(b=>b.onclick=()=>b.dataset.ai==="optimize"?openOptimizeWizard():void ai(b.dataset.ai as any));
 $("#addGreeting").onclick=()=>{const index=card.data.alternate_greetings.push("")-1;selected.add(greetingField(index));renderExtras();renderChecks();changed();};
 $("#importGreetings").onclick=()=>openComponentPicker("greetings");
 $("#partsImportBtn").onclick=()=>openComponentPicker("parts");
@@ -1211,6 +1254,23 @@ $("#settingsBtn").onclick = async () => {
   catch { $("#errorLogPath").textContent = "Pfad konnte nicht ermittelt werden"; }
 };
 $("#closeSettings").onclick = () => $("#settingsModal").classList.add("hidden");
+$("#closeOptimizeWizard").onclick = closeOptimizeWizard;
+$("#cancelOptimizeWizard").onclick = closeOptimizeWizard;
+$("#optimizeWizardModal").addEventListener("click", event => { if (event.target === $("#optimizeWizardModal")) closeOptimizeWizard(); });
+$("#nextOptimizeWizard").onclick = () => {
+  if (!optimizeWizardFields.size) { toast("Bitte mindestens ein Feld auswählen.", true); return; }
+  optimizeWizardStep = 1;
+  renderOptimizeWizard();
+};
+$("#backOptimizeWizard").onclick = () => { optimizeWizardStep = 0; renderOptimizeWizard(); };
+$("#startOptimizeWizard").onclick = () => {
+  const chosen = document.querySelector<HTMLInputElement>('input[name="optimizeWizardStrength"]:checked');
+  if (!chosen) { toast("Bitte eine Kürzungsstärke auswählen.", true); return; }
+  optimizeStrength = chosen.value as "gentle"|"balanced"|"strong";
+  localStorage.setItem("optimizeStrength", optimizeStrength);
+  closeOptimizeWizard();
+  void ai("optimize", orderedEditableFields().filter(field => optimizeWizardFields.has(field.key)).map(field => field.key));
+};
 $("#settingsModal").addEventListener("click", event => { if (event.target === $("#settingsModal")) $("#settingsModal").classList.add("hidden"); });
 $("#nsfwSetting").onchange = event => {
   nsfwEnabled = (event.target as HTMLInputElement).checked;
