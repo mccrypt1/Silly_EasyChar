@@ -2,6 +2,25 @@
 
 All notable changes to Silly EasyChar are documented here. Each release lists English notes first, followed by the German translation.
 
+## v0.3.6
+
+### English
+
+- Changed isolated Ollama greeting improvements into editable proposals: the original remains untouched until acceptance, the generated draft can be reset, and the original can be restored before saving.
+- Added protected, named manual card backups that are excluded from the three-item automatic-version rotation.
+- Added safe removal of linked cards from the SillyTavern folder after confirmation. The original file is copied to the app recovery folder before removal, while the open card remains available as a local draft.
+- Added editable names for previous automatic versions and manual backups while retaining their timestamp, size, and type.
+- Replaced immediate token minimization with a two-step wizard for field selection and optimization strength; the existing before/after review still controls final application.
+
+### Deutsch
+
+- Isolierte Ollama-Verbesserungen für Begrüßungen erscheinen nun als bearbeitbare Vorschläge: Das Original bleibt bis zur Übernahme unverändert, der KI-Entwurf kann zurückgesetzt und der ursprüngliche Text vor dem Speichern wiederhergestellt werden.
+- Geschützte, benennbare manuelle Kartensicherungen ergänzt; sie sind von der Rotation der drei automatischen Versionen ausgenommen.
+- Verknüpfte Karten können nach einer Sicherheitsabfrage sicher aus dem SillyTavern-Ordner entfernt werden. Vor dem Entfernen wird die Originaldatei in den Wiederherstellungsordner der App kopiert, während die geöffnete Karte als lokaler Entwurf erhalten bleibt.
+- Frühere automatische Versionen und manuelle Sicherungen können frei benannt werden; Zeitpunkt, Größe und Typ bleiben weiterhin sichtbar.
+- Die sofortige Token-Minimierung wurde durch einen zweistufigen Wizard für Feldauswahl und Kürzungsstärke ersetzt; die endgültige Übernahme bleibt durch den bestehenden Vorher/Nachher-Vergleich kontrolliert.
+
+
 ## v0.3.5
 
 ### English
