@@ -243,6 +243,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             build_info,
             open_repository,
+            open_marinara_repository,
             error_log_location,
             write_error_log,
             export_character_file,
@@ -251,11 +252,18 @@ pub fn run() {
             choose_character_folder,
             scan_character_folder,
             read_character_file,
+            read_character_file_with_fingerprint,
             save_character_file,
             add_character_file,
+            duplicate_character_file,
             create_card_backup,
             remove_character_file,
+            list_recovery_cards,
+            read_recovery_card,
+            restore_removed_card,
+            delete_removed_card,
             list_card_versions,
+            read_card_version,
             rename_card_version,
             restore_card_version
         ])
@@ -282,6 +290,71 @@ struct VersionInfo {
     size: u64,
     manual: bool,
     label: Option<String>,
+    content_hash: String,
+}
+
+#[tauri::command]
+fn open_marinara_repository() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("rundll32")
+            .args([
+                "url.dll,FileProtocolHandler",
+                "https://github.com/Pasta-Devs/Marinara-Engine",
+            ])
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("Browser konnte nicht geöffnet werden: {error}"))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Der Repository-Link wird derzeit nur unter Windows unterstützt.".into())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileFingerprint {
+    modified: u64,
+    size: u64,
+    sha256: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadCardResult {
+    bytes: Vec<u8>,
+    fingerprint: FileFingerprint,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveCardResult {
+    fingerprint: FileFingerprint,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryManifest {
+    id: String,
+    archived_file: String,
+    original_path: String,
+    card_name: String,
+    format: String,
+    removed_at: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryEntry {
+    id: String,
+    card_name: String,
+    file_name: String,
+    original_path: Option<String>,
+    format: String,
+    removed_at: u64,
+    size: u64,
+    legacy: bool,
 }
 
 fn parse_version_filename(name: &str) -> Option<(u64, bool)> {
@@ -475,10 +548,45 @@ fn prune_versions(dir: &Path, keep: usize) -> Result<(), String> {
     Ok(())
 }
 
+fn file_fingerprint(path: &Path) -> Result<FileFingerprint, String> {
+    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    let meta = fs::metadata(path).map_err(|error| error.to_string())?;
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    Ok(FileFingerprint {
+        modified,
+        size: meta.len(),
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+    })
+}
+
+fn newest_identical_automatic_version(
+    dir: &Path,
+    content_hash: &str,
+) -> Result<Option<String>, String> {
+    let newest = fs::read_dir(dir)
+        .map_err(|error| error.to_string())?
+        .flatten()
+        .filter(|entry| {
+            parse_version_filename(&entry.file_name().to_string_lossy())
+                .is_some_and(|(_, is_manual)| !is_manual)
+        })
+        .max_by_key(|entry| entry.file_name());
+    Ok(newest.and_then(|entry| {
+        (file_fingerprint(&entry.path()).ok()?.sha256 == content_hash)
+            .then(|| entry.file_name().to_string_lossy().into_owned())
+    }))
+}
+
 fn copy_card_version(
     app: &tauri::AppHandle,
     card_path: &Path,
     manual: bool,
+    keep: usize,
 ) -> Result<String, String> {
     if !card_path.exists() {
         return Err("Die Karte existiert nicht mehr.".into());
@@ -498,19 +606,26 @@ fn copy_card_version(
     } else {
         format!("{stamp}.{extension}")
     };
+    if !manual {
+        let current_hash = file_fingerprint(card_path)?.sha256;
+        if let Some(existing) = newest_identical_automatic_version(&dir, &current_hash)? {
+            prune_versions(&dir, keep.clamp(1, 100))?;
+            return Ok(existing);
+        }
+    }
     fs::copy(card_path, dir.join(&id))
         .map_err(|error| format!("Version konnte nicht angelegt werden: {error}"))?;
     if !manual {
-        prune_versions(&dir, 3)?;
+        prune_versions(&dir, keep.clamp(1, 100))?;
     }
     Ok(id)
 }
 
-fn make_backup(app: &tauri::AppHandle, card_path: &Path) -> Result<(), String> {
+fn make_backup(app: &tauri::AppHandle, card_path: &Path, keep: usize) -> Result<(), String> {
     if !card_path.exists() {
         return Ok(());
     }
-    copy_card_version(app, card_path, false)?;
+    copy_card_version(app, card_path, false, keep)?;
     Ok(())
 }
 
@@ -522,17 +637,83 @@ fn archive_card(card_path: &Path, recovery_dir: &Path) -> Result<PathBuf, String
     let stamp = std::time::SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
-        .as_millis();
+        .as_millis() as u64;
     let file_name = card_path
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or_else(|| "Ungültiger Kartenpfad.".to_string())?;
     let target = recovery_dir.join(format!("{stamp}-{file_name}"));
-    fs::copy(card_path, &target)
-        .map_err(|error| format!("Wiederherstellungskopie konnte nicht erstellt werden: {error}"))?;
+    fs::copy(card_path, &target).map_err(|error| {
+        format!("Wiederherstellungskopie konnte nicht erstellt werden: {error}")
+    })?;
+    let manifest = RecoveryManifest {
+        id: target
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        archived_file: target
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        original_path: card_path.to_string_lossy().into_owned(),
+        card_name: card_name(card_path).unwrap_or_else(|| file_name.to_string()),
+        format: card_path
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_uppercase(),
+        removed_at: stamp,
+    };
+    let manifest_path = recovery_dir.join(format!("{stamp}.recovery.json"));
+    if let Err(error) = fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
+    ) {
+        let _ = fs::remove_file(&target);
+        return Err(format!(
+            "Wiederherstellungsmanifest konnte nicht erstellt werden: {error}"
+        ));
+    }
     fs::remove_file(card_path)
         .map_err(|error| format!("Karte konnte nicht aus SillyTavern entfernt werden: {error}"))?;
     Ok(target)
+}
+
+fn recovery_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("removed-cards"))
+}
+
+fn safe_recovery_file(dir: &Path, id: &str) -> Result<PathBuf, String> {
+    if Path::new(id).components().count() != 1 || id.ends_with(".recovery.json") {
+        return Err("Ungültige Papierkorb-ID.".into());
+    }
+    let file = dir.join(id);
+    if !allowed_card_path(&file) {
+        return Err("Papierkorb-Eintrag nicht gefunden.".into());
+    }
+    Ok(file)
+}
+
+fn unique_target(path: PathBuf) -> PathBuf {
+    if !path.exists() {
+        return path;
+    }
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let extension = path.extension().unwrap_or_default().to_string_lossy();
+    for index in 2..10_000 {
+        let candidate = parent.join(format!("{stem} ({index}).{extension}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    parent.join(format!("{stem}-wiederhergestellt.{extension}"))
 }
 
 #[tauri::command]
@@ -587,7 +768,7 @@ fn scan_character_folder(path: String) -> Result<Vec<LibraryCard>, String> {
     }
     let mut cards = Vec::new();
     collect_cards(&dir, &mut cards);
-    cards.sort_by(|left, right| right.modified.cmp(&left.modified));
+    cards.sort_by_key(|card| std::cmp::Reverse(card.modified));
     Ok(cards)
 }
 
@@ -605,17 +786,43 @@ fn read_character_file(path: String) -> Result<Vec<u8>, String> {
 }
 
 #[tauri::command]
-fn save_character_file(app: tauri::AppHandle, path: String, bytes: Vec<u8>) -> Result<(), String> {
-    let file = PathBuf::from(path);
+fn read_character_file_with_fingerprint(path: String) -> Result<ReadCardResult, String> {
+    let bytes = read_character_file(path.clone())?;
+    Ok(ReadCardResult {
+        bytes,
+        fingerprint: file_fingerprint(Path::new(&path))?,
+    })
+}
+
+#[tauri::command]
+fn save_character_file(
+    app: tauri::AppHandle,
+    path: String,
+    bytes: Vec<u8>,
+    expected_fingerprint: Option<FileFingerprint>,
+    force: Option<bool>,
+    backup_keep: Option<usize>,
+) -> Result<SaveCardResult, String> {
+    let file = PathBuf::from(&path);
     if !allowed_card_path(&file) {
         return Err("Die Zieldatei muss eine vorhandene PNG- oder JSON-Karte sein.".into());
     }
     if bytes.len() > 64 * 1024 * 1024 {
         return Err("Die Karte ist größer als 64 MB.".into());
     }
-    make_backup(&app, &file)?;
+    let current = file_fingerprint(&file)?;
+    if !force.unwrap_or(false) && expected_fingerprint.is_some_and(|expected| expected != current) {
+        return Err(format!(
+            "FILE_CONFLICT|{}|{}|{}",
+            current.modified, current.size, current.sha256
+        ));
+    }
+    make_backup(&app, &file, backup_keep.unwrap_or(10))?;
     fs::write(file, bytes)
-        .map_err(|error| format!("Karte konnte nicht gespeichert werden: {error}"))
+        .map_err(|error| format!("Karte konnte nicht gespeichert werden: {error}"))?;
+    Ok(SaveCardResult {
+        fingerprint: file_fingerprint(Path::new(&path))?,
+    })
 }
 
 #[tauri::command]
@@ -655,12 +862,33 @@ fn add_character_file(folder: String, file_name: String, bytes: Vec<u8>) -> Resu
 }
 
 #[tauri::command]
-fn create_card_backup(app: tauri::AppHandle, path: String, label: String) -> Result<String, String> {
-    let file = PathBuf::from(path);
+fn duplicate_character_file(path: String) -> Result<String, String> {
+    let source = PathBuf::from(path);
+    if !allowed_card_path(&source) {
+        return Err("Nur vorhandene PNG- und JSON-Karten können dupliziert werden.".into());
+    }
+    let parent = source
+        .parent()
+        .ok_or_else(|| "Ungültiger Kartenpfad.".to_string())?;
+    let stem = source.file_stem().unwrap_or_default().to_string_lossy();
+    let extension = source.extension().unwrap_or_default().to_string_lossy();
+    let target = unique_target(parent.join(format!("{stem} - Experiment.{extension}")));
+    fs::copy(&source, &target)
+        .map_err(|error| format!("Experimentkopie konnte nicht erstellt werden: {error}"))?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn create_card_backup(
+    app: tauri::AppHandle,
+    path: String,
+    label: String,
+) -> Result<String, String> {
+    let file = PathBuf::from(&path);
     if !allowed_card_path(&file) {
         return Err("Nur vorhandene PNG- und JSON-Karten können gesichert werden.".into());
     }
-    let id = copy_card_version(&app, &file, true)?;
+    let id = copy_card_version(&app, &file, true, 10)?;
     let dir = version_dir(&app, &file)?;
     set_version_label(&dir, &id, &label)?;
     Ok(id)
@@ -669,12 +897,129 @@ fn create_card_backup(app: tauri::AppHandle, path: String, label: String) -> Res
 #[tauri::command]
 fn remove_character_file(app: tauri::AppHandle, path: String) -> Result<String, String> {
     let file = PathBuf::from(path);
-    let recovery_dir = app
-        .path()
-        .app_data_dir()
+    archive_card(&file, &recovery_dir(&app)?).map(|target| target.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn list_recovery_cards(app: tauri::AppHandle) -> Result<Vec<RecoveryEntry>, String> {
+    let dir = recovery_dir(&app)?;
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut output = Vec::new();
+    for entry in fs::read_dir(&dir)
         .map_err(|error| error.to_string())?
-        .join("removed-cards");
-    archive_card(&file, &recovery_dir).map(|target| target.to_string_lossy().into_owned())
+        .flatten()
+    {
+        let path = entry.path();
+        if !allowed_card_path(&path)
+            || entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".recovery.json")
+        {
+            continue;
+        }
+        let id = entry.file_name().to_string_lossy().into_owned();
+        let prefix = id
+            .split('-')
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        let manifest_path = dir.join(format!("{prefix}.recovery.json"));
+        let manifest: Option<RecoveryManifest> = fs::read(manifest_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let meta = entry.metadata().map_err(|error| error.to_string())?;
+        output.push(RecoveryEntry {
+            id: id.clone(),
+            card_name: manifest
+                .as_ref()
+                .map(|value| value.card_name.clone())
+                .or_else(|| card_name(&path))
+                .unwrap_or_else(|| id.clone()),
+            file_name: id
+                .split_once('-')
+                .map(|(_, name)| name)
+                .unwrap_or(&id)
+                .to_string(),
+            original_path: manifest.as_ref().map(|value| value.original_path.clone()),
+            format: path
+                .extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_ascii_uppercase(),
+            removed_at: manifest
+                .as_ref()
+                .map(|value| value.removed_at)
+                .unwrap_or(prefix),
+            size: meta.len(),
+            legacy: manifest.is_none(),
+        });
+    }
+    output.sort_by_key(|entry| std::cmp::Reverse(entry.removed_at));
+    Ok(output)
+}
+
+#[tauri::command]
+fn read_recovery_card(app: tauri::AppHandle, id: String) -> Result<Vec<u8>, String> {
+    fs::read(safe_recovery_file(&recovery_dir(&app)?, &id)?).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn restore_removed_card(
+    app: tauri::AppHandle,
+    id: String,
+    fallback_folder: Option<String>,
+) -> Result<String, String> {
+    let dir = recovery_dir(&app)?;
+    let archived = safe_recovery_file(&dir, &id)?;
+    let prefix = id
+        .split('-')
+        .next()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let manifest_path = dir.join(format!("{prefix}.recovery.json"));
+    let manifest: Option<RecoveryManifest> = fs::read(&manifest_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let destination = if let Some(value) = manifest.as_ref() {
+        PathBuf::from(&value.original_path)
+    } else {
+        let folder = fallback_folder.ok_or_else(|| {
+            "Für diese ältere Sicherung muss zuerst ein SillyTavern-Ordner gekoppelt werden."
+                .to_string()
+        })?;
+        PathBuf::from(folder).join(id.split_once('-').map(|(_, name)| name).unwrap_or(&id))
+    };
+    let target = unique_target(destination);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::copy(&archived, &target)
+        .map_err(|error| format!("Karte konnte nicht wiederhergestellt werden: {error}"))?;
+    fs::remove_file(&archived).map_err(|error| error.to_string())?;
+    if manifest_path.exists() {
+        fs::remove_file(manifest_path).map_err(|error| error.to_string())?;
+    }
+    Ok(target.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn delete_removed_card(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let dir = recovery_dir(&app)?;
+    let archived = safe_recovery_file(&dir, &id)?;
+    let prefix = id
+        .split('-')
+        .next()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    fs::remove_file(archived).map_err(|error| error.to_string())?;
+    let manifest = dir.join(format!("{prefix}.recovery.json"));
+    if manifest.exists() {
+        fs::remove_file(manifest).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -697,11 +1042,21 @@ fn list_card_versions(app: tauri::AppHandle, path: String) -> Result<Vec<Version
                 created,
                 size: meta.len(),
                 manual,
+                content_hash: file_fingerprint(&entry.path()).ok()?.sha256,
             })
         })
         .collect();
     items.sort_by_key(|version| std::cmp::Reverse(version.created));
     Ok(items)
+}
+
+#[tauri::command]
+fn read_card_version(app: tauri::AppHandle, path: String, id: String) -> Result<Vec<u8>, String> {
+    if Path::new(&id).components().count() != 1 || parse_version_filename(&id).is_none() {
+        return Err("Ungültige Versions-ID.".into());
+    }
+    fs::read(version_dir(&app, Path::new(&path))?.join(id))
+        .map_err(|_| "Version nicht gefunden.".to_string())
 }
 
 #[tauri::command]
@@ -726,7 +1081,7 @@ fn restore_card_version(app: tauri::AppHandle, path: String, id: String) -> Resu
     }
     let source = version_dir(&app, &target)?.join(id);
     let bytes = fs::read(&source).map_err(|_| "Version nicht gefunden.".to_string())?;
-    make_backup(&app, &target)?;
+    make_backup(&app, &target, 10)?;
     fs::write(target, bytes).map_err(|error| error.to_string())
 }
 
@@ -776,7 +1131,32 @@ mod tests {
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect();
         names.sort();
-        assert_eq!(names, vec!["300.png", "400.png", "500.png", "manual-50.png"]);
+        assert_eq!(
+            names,
+            vec!["300.png", "400.png", "500.png", "manual-50.png"]
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn identical_latest_automatic_version_is_detected_for_deduplication() {
+        let dir =
+            std::env::temp_dir().join(format!("silly-easychar-dedupe-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("100.json"), "old").unwrap();
+        fs::write(dir.join("200.json"), "same").unwrap();
+        fs::write(dir.join("manual-300.json"), "same").unwrap();
+        let hash = format!("{:x}", Sha256::digest(b"same"));
+        assert_eq!(
+            newest_identical_automatic_version(&dir, &hash)
+                .unwrap()
+                .as_deref(),
+            Some("200.json")
+        );
+        fs::write(dir.join("400.json"), "different").unwrap();
+        assert!(newest_identical_automatic_version(&dir, &hash)
+            .unwrap()
+            .is_none());
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -790,7 +1170,10 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("manual-100.png"), "card").unwrap();
         set_version_label(&dir, "manual-100.png", "Vor großem Experiment").unwrap();
-        assert_eq!(read_version_labels(&dir)["manual-100.png"], "Vor großem Experiment");
+        assert_eq!(
+            read_version_labels(&dir)["manual-100.png"],
+            "Vor großem Experiment"
+        );
         set_version_label(&dir, "manual-100.png", "").unwrap();
         assert!(read_version_labels(&dir).is_empty());
         fs::remove_dir_all(dir).unwrap();
@@ -806,11 +1189,59 @@ mod tests {
         let recovery = dir.join("recovery");
         fs::create_dir_all(&dir).unwrap();
         let source = dir.join("character.json");
-        fs::write(&source, r#"{"spec":"chara_card_v3","data":{"name":"Safe"}}"#).unwrap();
+        fs::write(
+            &source,
+            r#"{"spec":"chara_card_v3","data":{"name":"Safe"}}"#,
+        )
+        .unwrap();
         let archived = archive_card(&source, &recovery).unwrap();
         assert!(!source.exists());
         assert!(archived.exists());
-        assert_eq!(fs::read_to_string(archived).unwrap(), r#"{"spec":"chara_card_v3","data":{"name":"Safe"}}"#);
+        assert_eq!(
+            fs::read_to_string(archived).unwrap(),
+            r#"{"spec":"chara_card_v3","data":{"name":"Safe"}}"#
+        );
+        let manifests: Vec<_> = fs::read_dir(&recovery)
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".recovery.json")
+            })
+            .collect();
+        assert_eq!(manifests.len(), 1);
+        let manifest: RecoveryManifest =
+            serde_json::from_slice(&fs::read(manifests[0].path()).unwrap()).unwrap();
+        assert_eq!(manifest.card_name, "Safe");
+        assert_eq!(manifest.original_path, source.to_string_lossy());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn fingerprints_detect_content_changes() {
+        let dir =
+            std::env::temp_dir().join(format!("silly-easychar-fingerprint-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("card.json");
+        fs::write(&file, "first").unwrap();
+        let first = file_fingerprint(&file).unwrap();
+        fs::write(&file, "second value").unwrap();
+        let second = file_fingerprint(&file).unwrap();
+        assert_ne!(first.sha256, second.sha256);
+        assert_ne!(first.size, second.size);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unique_targets_never_overwrite_existing_cards() {
+        let dir =
+            std::env::temp_dir().join(format!("silly-easychar-collision-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("card.json");
+        fs::write(&original, "existing").unwrap();
+        assert_eq!(unique_target(original), dir.join("card (2).json"));
         fs::remove_dir_all(dir).unwrap();
     }
 

@@ -7,10 +7,14 @@ import { formatElapsed, hallucinationDelay, LOADING_HALLUCINATIONS } from "./loa
 import { improveStandaloneGreeting, models, runAi, suggestStandaloneGreetingTitle } from "./ai";
 import { emptyDialogueExample, joinDialogueExamples, splitDialogueExamples } from "./dialogue-examples";
 import { CardLibrary } from "./library";
+import type { FileFingerprint, RecoveryEntry, VersionInfo } from "./library";
+import { diffCards, estimateTokens, promptUseFor, restoreCardParts, UndoHistory } from "./card-tools";
+import { basicSetup, EditorView } from "codemirror";
+import { json } from "@codemirror/lang-json";
 import { importCardParts, importPartLabels } from "./component-import";
 import type { ImportPart } from "./component-import";
 import type { LibraryEntry } from "./library";
-import type { AiResult, CharacterCard, CoreEditableField, EditableField, ScoreResult } from "./types";
+import type { AiResult, CardDiff, CharacterCard, CoreEditableField, EditableField, ScoreResult, UndoEntry } from "./types";
 
 const textFields: { key: CoreEditableField; label: string; rows: number; hint: string }[] = [
   { key: "name", label: "Name", rows: 1, hint: "Name der Figur" },
@@ -48,6 +52,13 @@ let aiBusy = false;
 let statusTimer = 0;
 let linkedPath: string | null = null;
 let linkedFormat: "PNG" | "JSON" | null = null;
+let linkedFingerprint: FileFingerprint | null = null;
+let backupKeep = Math.max(1, Math.min(100, Number(localStorage.getItem("backupKeep") || 10)));
+const undoHistory = new UndoHistory(100);
+let historyBaseline: UndoEntry = { card: structuredClone(card), image: null, label: "Start" };
+let historyBurst = false;
+let historyTimer = 0;
+let rawEditor: EditorView | null = null;
 let wizardStep = 0;
 let defaultImagePromise: Promise<ArrayBuffer> | null = null;
 let cropBitmap: ImageBitmap | null = null;
@@ -60,11 +71,12 @@ let cropOffsetY = 0;
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <header class="topbar">
-    <div class="brand"><div class="brand-mark">S</div><div class="brand-copy"><strong>Silly EasyChar</strong><small>Offline Character Studio</small><span id="buildInfo" class="build-info">v… · …</span></div><button id="settingsBtn" class="settings-button" title="Einstellungen öffnen" aria-label="Einstellungen">⚙</button><button id="repoLink" class="brand-watermark" title="Silly EasyChar auf GitHub öffnen">mccrypt1</button></div>
+    <div class="brand"><div class="brand-mark">S</div><div class="brand-copy"><strong>Silly EasyChar</strong><small>Offline Character Studio</small><span id="buildInfo" class="build-info">v… · …</span></div><button id="settingsBtn" class="settings-button" title="Einstellungen öffnen" aria-label="Einstellungen">⚙</button><button id="repoLink" class="brand-watermark" title="Silly EasyChar auf GitHub öffnen">mccrypt1</button><button id="marinaraLink" class="inspiration-link" title="Unabhängiges Projekt · Marinara Engine auf GitHub öffnen">Inspiriert von Marinara Engine · Pasta-Devs</button></div>
     <div class="top-actions">
       <button id="newBtn" class="ghost">＋ Neu</button><button id="importBtn" class="ghost">↥ Import</button><button id="partsImportBtn" class="ghost">Teile importieren</button>
       <button id="saveLinkedBtn" class="primary hidden">In SillyTavern speichern</button><button id="addFolderBtn" class="ghost hidden">Zum ST-Ordner</button>
-      <button id="backupLinkedBtn" class="ghost hidden">Sicherung erstellen</button><button id="versionsBtn" class="ghost hidden">Versionen</button><button id="removeLinkedBtn" class="danger-top hidden">Aus ST entfernen</button><button id="jsonBtn" class="ghost">JSON exportieren</button>
+      <button id="undoBtn" class="ghost" title="Rückgängig · Strg+Z" disabled>↶</button><button id="redoBtn" class="ghost" title="Wiederholen · Strg+Y" disabled>↷</button><button id="rawJsonBtn" class="ghost">Rohdaten</button><button id="trashBtn" class="ghost">Papierkorb</button>
+      <button id="backupLinkedBtn" class="ghost hidden">Sicherung erstellen</button><button id="duplicateLinkedBtn" class="ghost hidden">Experimentkopie</button><button id="versionsBtn" class="ghost hidden">Versionen</button><button id="removeLinkedBtn" class="danger-top hidden">Aus ST entfernen</button><button id="jsonBtn" class="ghost">JSON ohne Bild</button>
       <button id="pngBtn" class="primary">PNG exportieren</button>
     </div>
   </header>
@@ -119,6 +131,7 @@ app.innerHTML = `
       <label class="instruction-label">Was soll geändert werden?</label>
       <textarea id="instruction" rows="8" placeholder="z. B. Informationen auf passende Felder verteilen, auf Deutsch übersetzen und die Stimme natürlicher machen …"></textarea>
       <button id="editAi" class="primary wide">✦ Ausgewählte Felder bearbeiten</button>
+      <button id="editSelectionAi" class="ghost wide selection-ai">✦ Nur markierten Text bearbeiten</button>
       <div id="aiOutput" class="ai-output"><div class="empty-state"><span>✦</span><p>Wähle Felder und beschreibe deine Änderung – oder nutze eine Schnellaktion.</p></div></div>
     </aside>
   </main>
@@ -126,6 +139,7 @@ app.innerHTML = `
     <label>Oberflächensprache<select id="uiLanguage"><option value="de">Deutsch</option><option value="en" disabled>English · folgt zum öffentlichen Release</option></select></label>
     <label>Standard-Creator<input id="defaultCreator" placeholder="Wird bei neuen Karten eingetragen" /></label>
     <label>Stärke der Token-Kürzung<select id="optimizeStrength"><option value="gentle">Behutsam · mehr Details behalten</option><option value="balanced">Ausgewogen</option><option value="strong">Stark · maximal kompakt</option></select></label>
+    <label>Automatische Versionen behalten<input id="backupKeep" type="number" min="1" max="100" value="${backupKeep}" /><small>Identische Stände werden nicht doppelt angelegt. Manuelle Sicherungen bleiben geschützt.</small></label>
     <label class="settings-toggle"><span><b>NSFW-Verarbeitung</b><small>Erwachsene fiktionale Inhalte bei lokalen Ollama-Aktionen erhalten.</small></span><input id="nsfwSetting" type="checkbox" /><i></i></label>
     <details><summary>Hilfe</summary><div class="settings-help"><p><b>Token minimieren</b> kürzt einzelne oder alle ausgewählten Felder. Jede Änderung erscheint vor der Übernahme im Prüffenster.</p><p><b>Fehlerprotokoll</b> enthält nur Zeitpunkt, Programmversion, Vorgang und technischen Fehlercode – niemals Kartenfelder, Prompts oder Notizen.</p><p>Protokoll: <code id="errorLogPath">Wird ermittelt …</code></p></div></details>
   </div></div>
@@ -135,7 +149,10 @@ app.innerHTML = `
   </div></div>
   <div id="componentModal" class="modal hidden"><div class="modal-card component-modal"><div class="field-head"><h3>Kartenbestandteile importieren</h3><button id="closeComponentImport">×</button></div><p id="componentSourceName"></p><p>Textfelder ersetzen den aktuellen Inhalt. Begrüßungen und Lorebook-Einträge werden hinzugefügt, Tags werden zusammengeführt.</p><div id="componentChecks" class="component-checks"></div><button id="applyComponentImport" class="primary wide">Ausgewählte Bestandteile importieren</button></div></div>
   <div id="wizardModeModal" class="modal hidden"><div class="modal-card wizard-mode-modal"><div class="field-head"><h3>Wizard starten</h3><button id="closeWizardMode">×</button></div><p>Wie möchtest du den Schritt-für-Schritt-Wizard verwenden?</p><div class="wizard-mode-actions"><button id="wizardReviewMode" class="primary"><b>Vorhandene Karte prüfen</b><small>Aktuelle Inhalte laden und Feld für Feld überarbeiten.</small></button><button id="wizardNewMode" class="ghost"><b>Neue Karte erstellen</b><small>Aktuelle Karte verwerfen und mit einem leeren Wizard beginnen.</small></button></div></div></div>
-  <div id="versionModal" class="modal hidden"><div class="modal-card"><div class="field-head"><h3>Letzte Kartenversionen</h3><button id="closeVersions">×</button></div><p>Vor jedem Speichern wird automatisch eine Version angelegt. Maximal drei werden behalten.</p><div id="versionList"></div></div></div>
+  <div id="versionModal" class="modal hidden"><div class="modal-card version-modal-card"><div class="field-head"><h3>Kartenversionen vergleichen</h3><button id="closeVersions">×</button></div><p>Vor jedem Speichern wird automatisch eine deduplizierte Version angelegt. Einzelne geänderte Bereiche oder die vollständige Karte können wiederhergestellt werden.</p><div id="versionList"></div><div id="versionCompare" class="hidden"></div></div></div>
+  <div id="recoveryModal" class="modal hidden"><div class="modal-card recovery-modal-card"><div class="field-head"><h3>Papierkorb</h3><button id="closeRecovery">×</button></div><p>Entfernte Karten bleiben ausschließlich lokal erhalten, bis sie wiederhergestellt oder endgültig gelöscht werden.</p><div id="recoveryList"></div></div></div>
+  <div id="rawJsonModal" class="modal hidden"><div class="raw-json-card"><div class="field-head"><h3>Erweiterte V3-Rohdaten</h3><button id="closeRawJson">×</button></div><p>Unbekannte Erweiterungen bleiben erhalten. Suche: Strg+F · Formatieren prüft gleichzeitig die Syntax.</p><div id="rawJsonEditor"></div><p id="rawJsonError" class="raw-json-error"></p><div class="modal-actions"><button id="formatRawJson" class="ghost">Formatieren</button><button id="applyRawJson" class="primary">Geprüfte Rohdaten übernehmen</button></div></div></div>
+  <div id="conflictModal" class="modal hidden"><div class="modal-card conflict-card"><div class="field-head"><h3>Datei wurde extern geändert</h3></div><p>Die SillyTavern-Datei ist nicht mehr dieselbe Fassung, die geöffnet wurde. Wähle bewusst, wie fortgefahren werden soll.</p><div class="conflict-actions"><button data-conflict="reload" class="ghost">Neu laden</button><button data-conflict="compare" class="ghost">Vergleichen</button><button data-conflict="copy" class="ghost">Als Experimentkopie</button><button data-conflict="overwrite" class="danger-button">Trotzdem überschreiben</button><button data-conflict="cancel" class="link">Abbrechen</button></div></div></div>
   <div id="greetingLibraryModal" class="modal hidden"><div class="modal-card greeting-library-modal"><div class="field-head"><h3>Alternative-Begrüßungen-Bibliothek</h3><button id="closeGreetingLibrary">×</button></div>
     <p>Diese Bibliothek wird nur lokal auf deinem PC gespeichert. Einträge werden erst nach einem Klick zur geöffneten Karte hinzugefügt.</p>
     <input id="greetingLibrarySearch" placeholder="Bibliothek durchsuchen …" />
@@ -161,7 +178,29 @@ function escapeAttr(v: string) { return v.replace(/[&<>"]/g, c => ({ "&": "&amp;
 function escapeHtml(v: string) { return escapeAttr(v).replace(/'/g, "&#39;"); }
 function loadDraft(): CharacterCard { try { return normalizeCard(JSON.parse(localStorage.getItem("draft") || "null")); } catch { return emptyCard(); } }
 function saveDraft() { localStorage.setItem("draft", JSON.stringify(card)); $("#saveState").textContent = "Lokal gespeichert"; }
-function changed() { $("#saveState").textContent = "Speichert …"; score = localScore(card); renderScore(); window.clearTimeout(statusTimer); statusTimer = window.setTimeout(saveDraft, 350); }
+function historyEntry(label: string): UndoEntry { return { card: structuredClone(card), image: imageBuffer?.slice(0) ?? null, label }; }
+function updateUndoButtons() {
+  ($("#undoBtn") as HTMLButtonElement).disabled = !undoHistory.canUndo;
+  ($("#redoBtn") as HTMLButtonElement).disabled = !undoHistory.canRedo;
+}
+function resetHistory(label = "Geladener Stand") {
+  undoHistory.clear(); historyBaseline = historyEntry(label); historyBurst = false; window.clearTimeout(historyTimer); updateUndoButtons();
+}
+function changed(label = "Bearbeitung") {
+  if (!historyBurst) { undoHistory.push(historyBaseline); historyBurst = true; updateUndoButtons(); }
+  window.clearTimeout(historyTimer);
+  historyTimer = window.setTimeout(() => { historyBaseline = historyEntry(label); historyBurst = false; }, 550);
+  $("#saveState").textContent = "Speichert …"; score = localScore(card); renderScore(); window.clearTimeout(statusTimer); statusTimer = window.setTimeout(saveDraft, 350);
+}
+function applyHistory(entry: UndoEntry) {
+  card = normalizeCard(entry.card);
+  if (entry.image) commitPortrait(entry.image, false); else clearPortrait();
+  historyBaseline = historyEntry(entry.label); historyBurst = false;
+  score = localScore(card); renderAll(); saveDraft(); void saveDraftPortrait(imageBuffer).catch(() => undefined); updateUndoButtons();
+  toast(entry.label);
+}
+function undo() { const entry = undoHistory.undo(historyEntry("Aktueller Stand")); if (entry) applyHistory(entry); }
+function redo() { const entry = undoHistory.redo(historyEntry("Aktueller Stand")); if (entry) applyHistory(entry); }
 function newCardWithDefaults() {
   const next = emptyCard();
   next.data.creator = localStorage.getItem("defaultCreator") || "";
@@ -320,6 +359,7 @@ function renderExtras() {
   };
   $("#greetings").innerHTML = card.data.alternate_greetings.map((g, i) => `<div class="repeat ${selected.has(greetingField(i)) ? "selected-field" : ""}" data-selection-key="${greetingField(i)}"><textarea rows="5" data-greeting="${i}" placeholder="Alternative Begrüßung ${i + 1}">${escapeHtml(g)}</textarea><button data-remove-greeting="${i}">×</button></div>`).join("") || `<p class="muted">Noch keine alternativen Begrüßungen.</p>`;
   document.querySelectorAll<HTMLTextAreaElement>("[data-greeting]").forEach(el => {
+    el.onfocus = () => { activeField = greetingField(Number(el.dataset.greeting)); };
     el.oninput = () => { card.data.alternate_greetings[Number(el.dataset.greeting)] = el.value; changed(); };
     el.onchange = () => { const index = Number(el.dataset.greeting); const value = normalizePlaceholders(el.value); if (value !== el.value) { el.value = value; card.data.alternate_greetings[index] = value; changed(); } };
   });
@@ -431,7 +471,9 @@ function renderOptimizeWizard() {
     const radio = document.querySelector<HTMLInputElement>(`input[name="optimizeWizardStrength"][value="${optimizeStrength}"]`);
     if (radio) radio.checked = true;
     const labels = orderedEditableFields().filter(field => optimizeWizardFields.has(field.key)).map(field => field.label);
-    $("#optimizeSummary").textContent = `${labels.length} Feld${labels.length === 1 ? "" : "er"}: ${labels.join(", ")}`;
+    const chosen = orderedEditableFields().filter(field => optimizeWizardFields.has(field.key));
+    const total = chosen.reduce((sum, field) => sum + estimateTokens(fieldValue(field.key)), 0);
+    $("#optimizeSummary").innerHTML = `<b>${labels.length} Feld${labels.length === 1 ? "" : "er"} · derzeit ungefähr ${total} Token</b><small>Modellunabhängige lokale Schätzung (Zeichen/4). Tatsächliche Werte hängen vom Ollama-Modell ab.</small>${chosen.map(field => `<span>${escapeHtml(field.label)} · ca. ${estimateTokens(fieldValue(field.key))} · ${promptUseFor(field.key)}</span>`).join("")}`;
   }
 }
 
@@ -463,6 +505,24 @@ function renderPortrait() {
 function renderAll() { reconcileSelectedFields(); renderFields(); renderChecks(); renderExtras(); renderLore(); renderScore(); renderPortrait(); syncSelectionHighlights(); }
 
 function toast(message: string, bad=false) { const t=$("#toast"); t.textContent=message; t.className=bad?"show bad":"show"; setTimeout(()=>t.className="",3000); }
+function rawJsonValue(): string { return rawEditor?.state.doc.toString() ?? ""; }
+function validateRawJson(): CharacterCard | null {
+  try {
+    const parsed = JSON.parse(rawJsonValue());
+    if (!parsed || typeof parsed !== "object" || !parsed.data || typeof parsed.data !== "object") throw new Error("Es wird ein Character-Card-Objekt mit data benötigt.");
+    $("#rawJsonError").textContent = "JSON gültig · unbekannte V3-Eigenschaften werden erhalten.";
+    return normalizeCard(parsed);
+  } catch (error) {
+    $("#rawJsonError").textContent = "Ungültig: " + (error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
+function openRawJson() {
+  rawEditor?.destroy();
+  rawEditor = new EditorView({ doc: JSON.stringify(toV3Card(card), null, 2), extensions: [basicSetup, json(), EditorView.updateListener.of(update => { if (update.docChanged) validateRawJson(); })], parent: $("#rawJsonEditor") });
+  $("#rawJsonModal").classList.remove("hidden"); validateRawJson();
+}
+function closeRawJson() { $("#rawJsonModal").classList.add("hidden"); rawEditor?.destroy(); rawEditor = null; }
 function resetAiInstruction() {
   ($("#instruction") as HTMLTextAreaElement).value = "";
   $("#aiOutput").innerHTML = `<div class="empty-state"><span>✦</span><p>Wähle Felder und beschreibe deine Änderung – oder nutze eine Schnellaktion.</p></div>`;
@@ -498,7 +558,7 @@ function clearPortrait() {
 async function restoreDraftPortrait() {
   try {
     const stored = await loadDraftPortrait();
-    if (stored && !imageBuffer) commitPortrait(stored, false);
+    if (stored && !imageBuffer) { commitPortrait(stored, false); resetHistory("Lokaler Entwurf"); }
   } catch {
     // IndexedDB may be unavailable in restricted WebViews; the card still uses the default portrait.
   }
@@ -582,20 +642,27 @@ function startThinking(host: HTMLElement, label: string, hideWhenDone = false) {
     }
   };
 }
-async function reviewFieldChanges(fields: AiResult["fields"], request: string): Promise<AiResult["fields"] | null> {
+async function reviewFieldChanges(fields: AiResult["fields"], request: string, beforeOverrides: Partial<Record<EditableField, string>> = {}): Promise<AiResult["fields"] | null> {
   const entries = Object.entries(fields ?? {}).filter((entry): entry is [EditableField, string] => typeof entry[1] === "string");
   if (!entries.length) return fields;
   const modal = $("#reviewModal");
   $("#reviewRequest").textContent = request || "Allgemeine Verbesserung der ausgewählten Felder";
-  $("#reviewFields").innerHTML = entries.map(([key, after]) => `
+  $("#reviewFields").innerHTML = entries.map(([key, after]) => {
+    const before = beforeOverrides[key] ?? fieldValue(key);
+    const beforeTokens = estimateTokens(before);
+    const afterTokens = estimateTokens(after);
+    const saved = beforeTokens - afterTokens;
+    const percentage = beforeTokens ? Math.round(saved / beforeTokens * 100) : 0;
+    return `
     <article class="review-field">
-      <div class="review-field-title"><label><input type="checkbox" data-review-check="${escapeAttr(key)}" checked /> ${escapeHtml(fieldTitle(key))}</label><span>✎ Geändert</span></div>
+      <div class="review-field-title"><label><input type="checkbox" data-review-check="${escapeAttr(key)}" checked /> ${escapeHtml(fieldTitle(key))}</label><span>ca. ${beforeTokens} → ${afterTokens} Token · ${saved >= 0 ? "−" + saved : "+" + Math.abs(saved)} (${Math.abs(percentage)} %) · ${promptUseFor(key)}</span></div>
       <div class="review-columns">
-        <label><small>VORHER</small><textarea readonly>${escapeHtml(fieldValue(key))}</textarea></label>
+        <label><small>VORHER</small><textarea readonly>${escapeHtml(before)}</textarea></label>
         <b>→</b>
         <label><small>NACHHER · BEARBEITBAR</small><textarea data-review-after="${escapeAttr(key)}">${escapeHtml(after)}</textarea></label>
       </div>
-    </article>`).join("");
+    </article>`;
+  }).join("");
   modal.classList.remove("hidden");
   return new Promise(resolve => {
     const finish = (value: AiResult["fields"] | null) => { modal.classList.add("hidden"); resolve(value); };
@@ -628,7 +695,7 @@ async function loadBuildInfo() {
   try {
     const info = await window.__TAURI__?.core.invoke<{ version: string; commit: string }>("build_info");
     if (info) $("#buildInfo").textContent = `v${info.version} · ${info.commit}`;
-  } catch { $("#buildInfo").textContent = "v0.3.6 · development"; }
+  } catch { $("#buildInfo").textContent = "v0.3.7 · development"; }
 }
 function technicalErrorKind(error: unknown): string {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
@@ -883,8 +950,8 @@ $("#improveGreetingEditor").onclick=async()=>{
   }finally{timer.stop();button.disabled=false;}
 };
 
-$("#newBtn").onclick=()=>{if(!confirm("Aktuelle Karte durch eine neue ersetzen? Der letzte Stand bleibt nur im lokalen Entwurf."))return; card=newCardWithDefaults();clearPortrait();linkedPath=null;linkedFormat=null;resetWizardState();resetAiInstruction();score=localScore(card);renderAll();syncLinkedButtons();changed();};
-$("#importBtn").onclick=()=>$("#fileInput").click(); $("#fileInput").onchange=async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(f)try{linkedPath=null;linkedFormat=null;await importFile(f);syncLinkedButtons();}catch(err){toast(err instanceof Error?err.message:String(err),true);}};
+$("#newBtn").onclick=()=>{if(!confirm("Aktuelle Karte durch eine neue ersetzen? Der letzte Stand bleibt nur im lokalen Entwurf."))return; card=newCardWithDefaults();clearPortrait();linkedPath=null;linkedFormat=null;linkedFingerprint=null;resetWizardState();resetAiInstruction();score=localScore(card);renderAll();syncLinkedButtons();changed("Neue Karte");};
+$("#importBtn").onclick=()=>$("#fileInput").click(); $("#fileInput").onchange=async e=>{const f=(e.target as HTMLInputElement).files?.[0];if(f)try{linkedPath=null;linkedFormat=null;linkedFingerprint=null;await importFile(f);syncLinkedButtons();}catch(err){toast(err instanceof Error?err.message:String(err),true);}};
 $("#imageBtn").onclick=()=>$("#imageInput").click(); $("#portrait").onclick=()=>$("#imageInput").click(); $("#imageInput").onchange=async e=>{const input=e.target as HTMLInputElement;const f=input.files?.[0];if(!f)return;try{await openCrop(await imageAsPng(f));}catch(error){toast(error instanceof Error?error.message:String(error),true);}finally{input.value="";}};
 $("#cropImageBtn").onclick=()=>{if(imageBuffer)void openCrop(imageBuffer);};
 $("#closeCrop").onclick=closeCrop;
@@ -898,8 +965,8 @@ cropCanvas.onpointermove=event=>{if(!cropDragging)return;const factor=cropCanvas
 cropCanvas.onpointerup=event=>{cropDragging=false;if(cropCanvas.hasPointerCapture(event.pointerId))cropCanvas.releasePointerCapture(event.pointerId);};
 cropCanvas.onpointercancel=()=>{cropDragging=false;};
 $("#cropZoom").oninput=event=>{const nextScale=cropBaseScale*Number((event.target as HTMLInputElement).value);const ratio=nextScale/cropScale;cropOffsetX=cropCanvas.width/2-(cropCanvas.width/2-cropOffsetX)*ratio;cropOffsetY=cropCanvas.height/2-(cropCanvas.height/2-cropOffsetY)*ratio;cropScale=nextScale;drawCrop();};
-$("#cropOriginal").onclick=()=>{if(cropCandidate)commitPortrait(cropCandidate);closeCrop();toast("Originalportrait \u00fcbernommen.");};
-$("#applyCrop").onclick=async()=>{try{const blob=await new Promise<Blob>((resolve,reject)=>cropCanvas.toBlob(value=>value?resolve(value):reject(new Error("Der Portraitzuschnitt konnte nicht erstellt werden.")),"image/png"));commitPortrait(await blob.arrayBuffer());closeCrop();toast("Portraitzuschnitt \u00fcbernommen.");}catch(error){toast(error instanceof Error?error.message:String(error),true);}};
+$("#cropOriginal").onclick=()=>{if(cropCandidate){commitPortrait(cropCandidate);changed("Portrait geändert");}closeCrop();toast("Originalportrait \u00fcbernommen.");};
+$("#applyCrop").onclick=async()=>{try{const blob=await new Promise<Blob>((resolve,reject)=>cropCanvas.toBlob(value=>value?resolve(value):reject(new Error("Der Portraitzuschnitt konnte nicht erstellt werden.")),"image/png"));commitPortrait(await blob.arrayBuffer());changed("Portrait geändert");closeCrop();toast("Portraitzuschnitt \u00fcbernommen.");}catch(error){toast(error instanceof Error?error.message:String(error),true);}};
 $("#jsonBtn").onclick=async()=>{
   try {
     const output=toV3Card(prepareCardForExport(card));
@@ -970,25 +1037,62 @@ const wizardPrompts: Record<CoreEditableField, [string,string][]> = {
 };
 const wizardDetails: Partial<Record<CoreEditableField, string[]>> = {};
 
-async function openLibraryCard(bytes: Uint8Array, entry: LibraryEntry) {
+function decodeCardBytes(bytes: Uint8Array, format: "PNG" | "JSON"): CharacterCard {
+  if (format === "PNG") {
+    const parsed = extractCard(bytes.slice().buffer as ArrayBuffer);
+    if (!parsed) throw new Error("Die PNG-Datei enthält keine lesbare Character Card.");
+    return parsed;
+  }
+  return normalizeCard(JSON.parse(new TextDecoder().decode(bytes)));
+}
+function setFieldValue(target: CharacterCard, key: EditableField, value: string) {
+  if (key.startsWith("alternate_greeting:")) target.data.alternate_greetings[Number(key.split(":")[1])] = value;
+  else if (key.startsWith("mes_example:")) {
+    const examples = splitDialogueExamples(target.data.mes_example); examples[Number(key.split(":")[1])] = value; target.data.mes_example = joinDialogueExamples(examples);
+  } else target.data[key as CoreEditableField] = value;
+}
+function activeFieldEditor(): HTMLInputElement | HTMLTextAreaElement | null {
+  if (activeField.startsWith("alternate_greeting:")) return document.querySelector(`[data-greeting="${Number(activeField.split(":")[1])}"]`);
+  if (activeField.startsWith("mes_example:")) return document.querySelector(`[data-dialogue="${Number(activeField.split(":")[1])}"]`);
+  return document.querySelector(`[data-field="${activeField}"]`);
+}
+async function editSelectedText() {
+  if (aiBusy) return;
+  const editor = activeFieldEditor(); const start = editor?.selectionStart ?? 0; const end = editor?.selectionEnd ?? 0;
+  const whole = fieldValue(activeField); const passage = whole.slice(start, end);
+  if (!editor || start === end || !passage.trim()) { toast("Markiere zuerst Text in einem Kartenfeld.", true); return; }
+  aiBusy = true; document.body.classList.add("busy"); const timer = startThinking($("#aiOutput"), "Ollama bearbeitet nur die markierte Passage …");
+  try {
+    const temporary = structuredClone(card); setFieldValue(temporary, activeField, passage);
+    const result = await runAi({ baseUrl: ($("#ollamaUrl") as HTMLInputElement).value, model: ($("#model") as HTMLSelectElement).value, action: "edit", card: temporary, selected: [activeField], instruction: ($("#instruction") as HTMLTextAreaElement).value, language: ($("#language") as HTMLSelectElement).value, nsfw: nsfwEnabled, selectionMode: true });
+    timer.stop(); const replacement = result.fields?.[activeField]; if (typeof replacement !== "string") throw new Error("Ollama hat keinen Textvorschlag geliefert.");
+    const reviewed = await reviewFieldChanges({ [activeField]: replacement }, "Nur markierte Passage bearbeiten", { [activeField]: passage });
+    if (!reviewed?.[activeField]) return;
+    if (fieldValue(activeField) !== whole) throw new Error("Das Feld wurde während der Anfrage verändert. Der Vorschlag wurde aus Sicherheitsgründen nicht übernommen.");
+    setFieldValue(card, activeField, whole.slice(0, start) + reviewed[activeField]! + whole.slice(end)); renderAll(); changed("KI-Teilbearbeitung"); toast("Bearbeitete Passage übernommen.");
+  } catch (error) { recordTechnicalError("ai_selection", error); toast(error instanceof Error ? error.message : String(error), true); }
+  finally { timer.stop(); aiBusy = false; document.body.classList.remove("busy"); }
+}
+
+async function openLibraryCard(bytes: Uint8Array, entry: LibraryEntry, fingerprint: FileFingerprint) {
   resetWizardState();
   const buffer = bytes.slice().buffer as ArrayBuffer;
   if (entry.format === "PNG") {
-    const parsed = extractCard(buffer);
-    if (!parsed) throw new Error("Die PNG-Datei enthält keine lesbare Character Card.");
-    card = parsed;
+    card = decodeCardBytes(bytes, "PNG");
     commitPortrait(buffer);
   } else {
-    card = normalizeCard(JSON.parse(new TextDecoder().decode(bytes)));
+    card = decodeCardBytes(bytes, "JSON");
     clearPortrait();
   }
   linkedPath = entry.path;
   linkedFormat = entry.format;
+  linkedFingerprint = fingerprint;
   score = localScore(card);
   resetAiInstruction();
   renderAll();
   syncLinkedButtons();
   saveDraft();
+  resetHistory("Karte geöffnet");
   toast(card.data.name + " aus SillyTavern geöffnet.");
 }
 
@@ -1002,6 +1106,7 @@ async function currentBytes(format: "PNG" | "JSON"): Promise<Uint8Array> {
 function syncLinkedButtons() {
   $("#saveLinkedBtn").classList.toggle("hidden", !linkedPath);
   $("#backupLinkedBtn").classList.toggle("hidden", !linkedPath);
+  $("#duplicateLinkedBtn").classList.toggle("hidden", !linkedPath);
   $("#versionsBtn").classList.toggle("hidden", !linkedPath);
   $("#removeLinkedBtn").classList.toggle("hidden", !linkedPath);
   $("#addFolderBtn").classList.toggle("hidden", !!linkedPath || !library.folder);
@@ -1011,9 +1116,43 @@ function syncLinkedButtons() {
 async function saveLinkedCard() {
   if (!linkedPath || !linkedFormat) return;
   try {
-    await library.save(linkedPath, await currentBytes(linkedFormat));
+    linkedFingerprint = await library.save(linkedPath, await currentBytes(linkedFormat), linkedFingerprint, false, backupKeep);
     toast("In SillyTavern gespeichert · vorherige Version gesichert.");
-  } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
+  } catch (error) {
+    if (String(error).includes("FILE_CONFLICT")) { await resolveSaveConflict(); return; }
+    toast(error instanceof Error ? error.message : String(error), true);
+  }
+}
+
+function askConflict(): Promise<"reload"|"compare"|"copy"|"overwrite"|"cancel"> {
+  $("#conflictModal").classList.remove("hidden");
+  return new Promise(resolve => document.querySelectorAll<HTMLButtonElement>("[data-conflict]").forEach(button => button.onclick = () => {
+    $("#conflictModal").classList.add("hidden"); resolve(button.dataset.conflict as any);
+  }));
+}
+
+async function resolveSaveConflict() {
+  if (!linkedPath || !linkedFormat) return;
+  const choice = await askConflict();
+  if (choice === "cancel") return;
+  if (choice === "reload") {
+    await library.refresh(); const entry = library.cards.find(value => value.path === linkedPath); if (entry) await library.open(entry); return;
+  }
+  if (choice === "compare") {
+    const disk = await library.read(linkedPath);
+    const external = decodeCardBytes(Uint8Array.from(disk.bytes), linkedFormat);
+    showReadonlyComparison(diffCards(card, external, linkedFormat === "PNG"), "Editor ↔ extern geänderte Datei");
+    return;
+  }
+  const bytes = await currentBytes(linkedFormat);
+  if (choice === "copy") {
+    const duplicate = await library.duplicate(linkedPath, false);
+    await library.save(duplicate, bytes, null, true, backupKeep);
+    await library.refresh(); const entry = library.cards.find(value => value.path === duplicate); if (entry) await library.open(entry);
+    toast("Lokale Änderungen als Experimentkopie gespeichert."); return;
+  }
+  linkedFingerprint = await library.save(linkedPath, bytes, null, true, backupKeep);
+  toast("Externe Fassung gesichert und bewusst überschrieben.");
 }
 
 async function addCurrentToFolder() {
@@ -1021,9 +1160,15 @@ async function addCurrentToFolder() {
     const bytes = await currentBytes("PNG");
     linkedPath = await library.add(card.data.name || "character", bytes);
     linkedFormat = "PNG";
-    syncLinkedButtons();
+    await library.refresh(); const entry = library.cards.find(value => value.path === linkedPath); if (entry) await library.open(entry); else syncLinkedButtons();
     toast("Karte zum gekoppelten SillyTavern-Ordner hinzugefügt.");
   } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
+}
+
+async function duplicateLinkedCard() {
+  if (!linkedPath) return;
+  try { await library.duplicate(linkedPath); toast("Experimentkopie erstellt und geöffnet; das Original bleibt unverändert."); }
+  catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
 }
 
 async function backupLinkedCard() {
@@ -1046,9 +1191,43 @@ async function removeLinkedCard() {
     const recoveryPath = await library.remove(currentPath);
     linkedPath = null;
     linkedFormat = null;
+    linkedFingerprint = null;
     syncLinkedButtons();
     toast("Karte aus SillyTavern entfernt und sicher abgelegt: " + recoveryPath);
   } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
+}
+
+function diffText(value: unknown): string {
+  if (typeof value === "string") return value || "(leer)";
+  return JSON.stringify(value ?? null, null, 2);
+}
+
+function showReadonlyComparison(diffs: CardDiff[], title: string) {
+  $("#versionList").classList.add("hidden");
+  const host = $("#versionCompare"); host.classList.remove("hidden");
+  host.innerHTML = `<div class="comparison-head"><button class="ghost" data-back-versions>← Zurück</button><b>${escapeHtml(title)}</b></div>${diffs.length ? diffs.map(diff => `<article class="version-diff"><div class="review-field-title"><b>${escapeHtml(diff.label)}</b><span>${diff.kind === "portrait" ? "Dateiinhalt geändert" : promptUseFor(diff.path)}</span></div><div class="review-columns"><label><small>GESPEICHERTE/EXTERNE FASSUNG</small><textarea readonly>${escapeHtml(diffText(diff.before))}</textarea></label><b>→</b><label><small>AKTUELLER EDITOR</small><textarea readonly>${escapeHtml(diffText(diff.after))}</textarea></label></div></article>`).join("") : '<p class="good">Keine inhaltlichen Unterschiede gefunden.</p>'}`;
+  host.querySelector<HTMLButtonElement>("[data-back-versions]")!.onclick = () => { host.classList.add("hidden"); $("#versionModal").classList.add("hidden"); };
+  $("#versionModal").classList.remove("hidden");
+}
+
+async function compareVersion(version: VersionInfo) {
+  if (!linkedPath) return;
+  const bytes = Uint8Array.from(await library.readVersion(linkedPath, version.id));
+  const format = version.id.toLowerCase().endsWith(".json") ? "JSON" : "PNG";
+  const snapshot = decodeCardBytes(bytes, format);
+  const diffs = diffCards(card, snapshot, format === "PNG" && version.contentHash !== linkedFingerprint?.sha256);
+  $("#versionList").classList.add("hidden");
+  const host = $("#versionCompare"); host.classList.remove("hidden");
+  host.innerHTML = `<div class="comparison-head"><button class="ghost" data-back-versions>← Zurück</button><b>${escapeHtml(version.label || new Date(version.created).toLocaleString())}</b></div>${diffs.length ? diffs.map((diff, index) => `<article class="version-diff"><div class="review-field-title"><label><input type="checkbox" data-version-diff="${index}" checked /> ${escapeHtml(diff.label)}</label><span>${diff.kind === "portrait" ? "Portrait/PNG" : promptUseFor(diff.path)}</span></div><div class="review-columns"><label><small>VERSION</small><textarea readonly>${escapeHtml(diffText(diff.before))}</textarea></label><b>→</b><label><small>AKTUELL</small><textarea readonly>${escapeHtml(diffText(diff.after))}</textarea></label></div></article>`).join("") + '<div class="review-footer"><button data-apply-version-parts class="primary">Auswahl in Editor übernehmen</button></div>' : '<p class="good">Keine inhaltlichen Unterschiede gefunden.</p>'}`;
+  host.querySelector<HTMLButtonElement>("[data-back-versions]")!.onclick = () => { host.classList.add("hidden"); $("#versionList").classList.remove("hidden"); };
+  host.querySelector<HTMLButtonElement>("[data-apply-version-parts]")?.addEventListener("click", async () => {
+    const paths = [...host.querySelectorAll<HTMLInputElement>("[data-version-diff]:checked")].map(input => diffs[Number(input.dataset.versionDiff)].path);
+    if (!paths.length || !confirm("Ausgewählte Bereiche aus dieser Version übernehmen? Der aktuelle verknüpfte Stand wird vorher geschützt gesichert.")) return;
+    await library.backup(linkedPath!, "Vor Teilwiederherstellung");
+    card = restoreCardParts(card, snapshot, paths);
+    if (paths.includes("/portrait") && format === "PNG") commitPortrait(bytes.slice().buffer as ArrayBuffer);
+    renderAll(); changed("Teilwiederherstellung"); host.classList.add("hidden"); $("#versionModal").classList.add("hidden"); toast("Ausgewählte Versionsbereiche wurden in den Editor übernommen.");
+  });
 }
 
 async function showVersions() {
@@ -1059,9 +1238,11 @@ async function showVersions() {
       const date = new Date(version.created).toLocaleString();
       const size = Math.max(1, Math.round(version.size / 1024));
       const title = version.label?.trim() || date;
-      return '<div class="version-item"><span><b title="' + escapeAttr(date) + '">' + escapeHtml(title) + '</b><small>' + escapeHtml(date) + ' · ' + (version.manual ? 'Manuelle Sicherung · ' : 'Automatische Version · ') + size + ' KB</small></span><div><button class="ghost" data-rename-version="' + escapeAttr(version.id) + '">Umbenennen</button><button class="ghost" data-restore="' + escapeAttr(version.id) + '">Wiederherstellen</button></div></div>';
+      return '<div class="version-item"><span><b title="' + escapeAttr(date) + '">' + escapeHtml(title) + '</b><small>' + escapeHtml(date) + ' · ' + (version.manual ? 'Manuelle Sicherung · ' : 'Automatische Version · ') + size + ' KB · ' + escapeHtml(version.contentHash.slice(0, 8)) + '</small></span><div><button class="ghost" data-compare-version="' + escapeAttr(version.id) + '">Vergleichen</button><button class="ghost" data-rename-version="' + escapeAttr(version.id) + '">Umbenennen</button><button class="ghost" data-restore="' + escapeAttr(version.id) + '">Alles wiederherstellen</button></div></div>';
     }).join("") || '<p class="muted">Noch keine frühere Version vorhanden. Sie entsteht beim ersten Speichern.</p>';
     $("#versionModal").classList.remove("hidden");
+    $("#versionList").classList.remove("hidden"); $("#versionCompare").classList.add("hidden");
+    document.querySelectorAll<HTMLButtonElement>("[data-compare-version]").forEach(button => button.onclick = () => { const version = versions.find(item => item.id === button.dataset.compareVersion); if (version) void compareVersion(version); });
     document.querySelectorAll<HTMLButtonElement>("[data-restore]").forEach(button => button.onclick = async () => {
       if (!linkedPath || !confirm("Diese Version wiederherstellen? Der aktuelle Stand wird vorher ebenfalls gesichert.")) return;
       await library.restore(linkedPath, button.dataset.restore!);
@@ -1079,6 +1260,30 @@ async function showVersions() {
         await showVersions();
         toast(label.trim() ? "Version umbenannt." : "Versionsname entfernt.");
       } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
+    });
+  } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
+}
+
+async function showRecovery() {
+  try {
+    const entries = await library.recovery();
+    $("#recoveryList").innerHTML = entries.map((entry, index) => `<article class="recovery-item"><span><b>${escapeHtml(entry.cardName)}</b><small>${escapeHtml(entry.fileName)} · ${new Date(entry.removedAt).toLocaleString()} · ${Math.max(1, Math.round(entry.size / 1024))} KB${entry.legacy ? " · ältere Sicherung" : ""}</small></span><div><button class="ghost" data-preview-recovery="${index}">Vorschau</button><button class="ghost" data-restore-recovery="${index}">Wiederherstellen</button><button class="danger-link" data-delete-recovery="${index}">Endgültig löschen</button></div><section data-recovery-preview="${index}" class="recovery-preview hidden"></section></article>`).join("") || '<p class="muted">Der Papierkorb ist leer.</p>';
+    $("#recoveryModal").classList.remove("hidden");
+    document.querySelectorAll<HTMLButtonElement>("[data-preview-recovery]").forEach(button => button.onclick = async () => {
+      const index = Number(button.dataset.previewRecovery); const entry = entries[index]; const bytes = Uint8Array.from(await library.readRecovery(entry.id));
+      const preview = decodeCardBytes(bytes, entry.format); const host = document.querySelector<HTMLElement>(`[data-recovery-preview="${index}"]`)!;
+      host.innerHTML = `<b>${escapeHtml(preview.data.name)}</b><p>${escapeHtml(String(preview.data.description || "Keine Beschreibung").slice(0, 700))}</p><small>Erste Nachricht</small><p>${escapeHtml(String(preview.data.first_mes || "Nicht vorhanden").slice(0, 700))}</p>`; host.classList.toggle("hidden");
+    });
+    document.querySelectorAll<HTMLButtonElement>("[data-restore-recovery]").forEach(button => button.onclick = async () => {
+      const entry = entries[Number(button.dataset.restoreRecovery)];
+      if (!confirm(`„${entry.cardName}“ wiederherstellen? Bei einem Namenskonflikt wird automatisch eine neue Datei angelegt.`)) return;
+      const path = await library.restoreRemoved(entry.id); await showRecovery(); toast("Karte wiederhergestellt: " + path);
+    });
+    document.querySelectorAll<HTMLButtonElement>("[data-delete-recovery]").forEach(button => button.onclick = async () => {
+      const entry = entries[Number(button.dataset.deleteRecovery)];
+      if (!confirm(`„${entry.cardName}“ aus dem Papierkorb löschen?`)) return;
+      if (!confirm("Diese Aktion ist endgültig. Die Karte kann danach nicht mehr mit Silly EasyChar wiederhergestellt werden. Wirklich löschen?")) return;
+      await library.deleteRemoved(entry.id); await showRecovery(); toast("Papierkorb-Eintrag endgültig gelöscht.");
     });
   } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
 }
@@ -1185,6 +1390,7 @@ function chooseWizardMode(mode: "new" | "review") {
     clearPortrait();
     linkedPath = null;
     linkedFormat = null;
+    linkedFingerprint = null;
     selected = new Set<EditableField>(["description", "personality", "scenario", "first_mes"]);
     resetAiInstruction();
     changed();
@@ -1206,7 +1412,11 @@ renderWizard();
 $("#saveLinkedBtn").onclick = () => void saveLinkedCard();
 $("#addFolderBtn").onclick = () => void addCurrentToFolder();
 $("#backupLinkedBtn").onclick = () => void backupLinkedCard();
+$("#duplicateLinkedBtn").onclick = () => void duplicateLinkedCard();
 $("#removeLinkedBtn").onclick = () => void removeLinkedCard();
+$("#trashBtn").onclick = () => void showRecovery();
+$("#closeRecovery").onclick = () => $("#recoveryModal").classList.add("hidden");
+$("#recoveryModal").addEventListener("click", event => { if (event.target === $("#recoveryModal")) $("#recoveryModal").classList.add("hidden"); });
 $("#versionsBtn").onclick = () => void showVersions();
 $("#closeVersions").onclick = () => $("#versionModal").classList.add("hidden");
 $("#versionModal").addEventListener("click", event => { if (event.target === $("#versionModal")) $("#versionModal").classList.add("hidden"); });
@@ -1235,11 +1445,43 @@ $("#repoLink").onclick = async () => {
   try { await window.__TAURI__?.core.invoke("open_repository"); }
   catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
 };
+$("#marinaraLink").onclick = async () => {
+  try { await window.__TAURI__?.core.invoke("open_marinara_repository"); }
+  catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
+};
+$("#undoBtn").onclick = undo;
+$("#redoBtn").onclick = redo;
+window.addEventListener("keydown", event => {
+  if (!(event.ctrlKey || event.metaKey) || !["z", "y"].includes(event.key.toLowerCase()) || !$("#rawJsonModal").classList.contains("hidden")) return;
+  event.preventDefault();
+  event.key.toLowerCase() === "z" && !event.shiftKey ? undo() : redo();
+});
+$("#editSelectionAi").onclick = () => void editSelectedText();
+$("#rawJsonBtn").onclick = openRawJson;
+$("#closeRawJson").onclick = closeRawJson;
+$("#rawJsonModal").addEventListener("click", event => { if (event.target === $("#rawJsonModal")) closeRawJson(); });
+$("#formatRawJson").onclick = () => {
+  const parsed = validateRawJson();
+  if (!parsed || !rawEditor) return;
+  const formatted = JSON.stringify(JSON.parse(rawJsonValue()), null, 2);
+  rawEditor.dispatch({ changes: { from: 0, to: rawEditor.state.doc.length, insert: formatted } });
+  toast("JSON formatiert und geprüft.");
+};
+$("#applyRawJson").onclick = () => {
+  const parsed = validateRawJson();
+  if (!parsed) return;
+  card = parsed; renderAll(); changed("V3-Rohdaten übernommen"); closeRawJson(); toast("Geprüfte Rohdaten übernommen.");
+};
 $("#uiLanguage").onchange = event => localStorage.setItem("uiLanguage", (event.target as HTMLSelectElement).value);
 $("#defaultCreator").oninput = event => localStorage.setItem("defaultCreator", (event.target as HTMLInputElement).value);
 $("#optimizeStrength").onchange = event => {
   optimizeStrength = (event.target as HTMLSelectElement).value as "gentle"|"balanced"|"strong";
   localStorage.setItem("optimizeStrength", optimizeStrength);
+};
+$("#backupKeep").onchange = event => {
+  backupKeep = Math.max(1, Math.min(100, Number((event.target as HTMLInputElement).value) || 10));
+  (event.target as HTMLInputElement).value = String(backupKeep);
+  localStorage.setItem("backupKeep", String(backupKeep));
 };
 void loadBuildInfo();
 window.addEventListener("error", event => recordTechnicalError("window_error", event.error));
@@ -1249,6 +1491,7 @@ $("#settingsBtn").onclick = async () => {
   ($("#uiLanguage") as HTMLSelectElement).value = localStorage.getItem("uiLanguage") || "de";
   ($("#defaultCreator") as HTMLInputElement).value = localStorage.getItem("defaultCreator") || "";
   ($("#optimizeStrength") as HTMLSelectElement).value = optimizeStrength;
+  ($("#backupKeep") as HTMLInputElement).value = String(backupKeep);
   $("#settingsModal").classList.remove("hidden");
   try { $("#errorLogPath").textContent = await window.__TAURI__?.core.invoke<string>("error_log_location") ?? "Nur in der Desktop-App verfügbar"; }
   catch { $("#errorLogPath").textContent = "Pfad konnte nicht ermittelt werden"; }

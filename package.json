@@ -1,7 +1,7 @@
 {
   "name": "silly-easychar",
   "private": true,
-  "version": "0.3.6",
+  "version": "0.3.7",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,5 +16,9 @@
     "typescript": "^5.9.2",
     "vite": "^7.1.4",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@codemirror/lang-json": "^6.0.2",
+    "codemirror": "^6.0.2"
   }
 }

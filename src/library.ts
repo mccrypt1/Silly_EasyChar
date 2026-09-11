@@ -13,7 +13,11 @@ export interface VersionInfo {
   size: number;
   manual: boolean;
   label?: string;
+  contentHash: string;
 }
+
+export interface FileFingerprint { modified: number; size: number; sha256: string }
+export interface RecoveryEntry { id: string; cardName: string; fileName: string; originalPath?: string; format: "PNG"|"JSON"; removedAt: number; size: number; legacy: boolean }
 
 const invoke = <T>(command: string, args?: Record<string, unknown>) =>
   window.__TAURI__!.core.invoke<T>(command, args);
@@ -26,7 +30,7 @@ export class CardLibrary {
   private query = "";
   private favoritesOnly = false;
 
-  constructor(private onOpen: (bytes: Uint8Array, entry: LibraryEntry) => Promise<void>) {}
+  constructor(private onOpen: (bytes: Uint8Array, entry: LibraryEntry, fingerprint: FileFingerprint) => Promise<void>) {}
 
   mount(host: HTMLElement) {
     this.host = host;
@@ -55,13 +59,15 @@ export class CardLibrary {
   }
 
   async open(entry: LibraryEntry) {
-    const data = await invoke<number[]>("read_character_file", { path: entry.path });
-    await this.onOpen(Uint8Array.from(data), entry);
+    const data = await this.read(entry.path);
+    await this.onOpen(Uint8Array.from(data.bytes), entry, data.fingerprint);
   }
+  read(path: string) { return invoke<{ bytes: number[]; fingerprint: FileFingerprint }>("read_character_file_with_fingerprint", { path }); }
 
-  async save(path: string, bytes: Uint8Array) {
-    await invoke("save_character_file", { path, bytes: Array.from(bytes) });
+  async save(path: string, bytes: Uint8Array, fingerprint: FileFingerprint | null, force = false, backupKeep = 10) {
+    const result = await invoke<{ fingerprint: FileFingerprint }>("save_character_file", { path, bytes: Array.from(bytes), expectedFingerprint: fingerprint, force, backupKeep });
     await this.refresh();
+    return result.fingerprint;
   }
 
   async add(name: string, bytes: Uint8Array): Promise<string> {
@@ -82,6 +88,8 @@ export class CardLibrary {
     if (entry) await this.open(entry);
   }
 
+  readVersion(path: string, id: string) { return invoke<number[]>("read_card_version", { path, id }); }
+
   async backup(path: string, label: string) {
     await invoke("create_card_backup", { path, label });
   }
@@ -96,6 +104,22 @@ export class CardLibrary {
     localStorage.setItem("favorites", JSON.stringify([...this.favorites]));
     await this.refresh();
     return recoveryPath;
+  }
+
+  recovery() { return invoke<RecoveryEntry[]>("list_recovery_cards"); }
+  readRecovery(id: string) { return invoke<number[]>("read_recovery_card", { id }); }
+  async restoreRemoved(id: string) {
+    const path = await invoke<string>("restore_removed_card", { id, fallbackFolder: this.folder || null });
+    await this.refresh();
+    return path;
+  }
+  async deleteRemoved(id: string) { await invoke("delete_removed_card", { id }); }
+  async duplicate(path: string, open = true) {
+    const duplicate = await invoke<string>("duplicate_character_file", { path });
+    await this.refresh();
+    const entry = this.cards.find(card => card.path === duplicate);
+    if (open && entry) await this.open(entry);
+    return duplicate;
   }
 
   private toggleFavorite(path: string) {
