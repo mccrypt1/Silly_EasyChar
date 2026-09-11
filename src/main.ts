@@ -62,7 +62,7 @@ app.innerHTML = `
     <div class="top-actions">
       <button id="newBtn" class="ghost">＋ Neu</button><button id="importBtn" class="ghost">↥ Import</button><button id="partsImportBtn" class="ghost">Teile importieren</button>
       <button id="saveLinkedBtn" class="primary hidden">In SillyTavern speichern</button><button id="addFolderBtn" class="ghost hidden">Zum ST-Ordner</button>
-      <button id="versionsBtn" class="ghost hidden">Versionen</button><button id="jsonBtn" class="ghost">JSON exportieren</button>
+      <button id="backupLinkedBtn" class="ghost hidden">Sicherung erstellen</button><button id="versionsBtn" class="ghost hidden">Versionen</button><button id="removeLinkedBtn" class="danger-top hidden">Aus ST entfernen</button><button id="jsonBtn" class="ghost">JSON exportieren</button>
       <button id="pngBtn" class="primary">PNG exportieren</button>
     </div>
   </header>
@@ -958,7 +958,9 @@ async function currentBytes(format: "PNG" | "JSON"): Promise<Uint8Array> {
 
 function syncLinkedButtons() {
   $("#saveLinkedBtn").classList.toggle("hidden", !linkedPath);
+  $("#backupLinkedBtn").classList.toggle("hidden", !linkedPath);
   $("#versionsBtn").classList.toggle("hidden", !linkedPath);
+  $("#removeLinkedBtn").classList.toggle("hidden", !linkedPath);
   $("#addFolderBtn").classList.toggle("hidden", !!linkedPath || !library.folder);
   $("#saveState").textContent = linkedPath ? "Mit ST verknüpft" : "Lokal gespeichert";
 }
@@ -981,6 +983,28 @@ async function addCurrentToFolder() {
   } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
 }
 
+async function backupLinkedCard() {
+  if (!linkedPath) return;
+  try {
+    await library.backup(linkedPath);
+    toast("Geschützte manuelle Sicherung erstellt.");
+  } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
+}
+
+async function removeLinkedCard() {
+  if (!linkedPath) return;
+  const currentPath = linkedPath;
+  const fileName = currentPath.split(/[\\/]/).pop() || currentPath;
+  if (!confirm(`„${card.data.name || fileName}“ wirklich aus dem SillyTavern-Ordner entfernen?\n\nDie Datei wird in den Wiederherstellungsordner von Silly EasyChar verschoben. Die aktuell geöffnete Karte bleibt als lokaler Entwurf erhalten.`)) return;
+  try {
+    const recoveryPath = await library.remove(currentPath);
+    linkedPath = null;
+    linkedFormat = null;
+    syncLinkedButtons();
+    toast("Karte aus SillyTavern entfernt und sicher abgelegt: " + recoveryPath);
+  } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
+}
+
 async function showVersions() {
   if (!linkedPath) return;
   try {
@@ -988,7 +1012,7 @@ async function showVersions() {
     $("#versionList").innerHTML = versions.map(version => {
       const date = new Date(version.created).toLocaleString();
       const size = Math.max(1, Math.round(version.size / 1024));
-      return '<div class="version-item"><span><b>' + escapeHtml(date) + '</b><small>' + size + ' KB</small></span><button class="ghost" data-restore="' + escapeAttr(version.id) + '">Wiederherstellen</button></div>';
+      return '<div class="version-item"><span><b>' + escapeHtml(date) + '</b><small>' + (version.manual ? 'Manuelle Sicherung · ' : 'Automatische Version · ') + size + ' KB</small></span><button class="ghost" data-restore="' + escapeAttr(version.id) + '">Wiederherstellen</button></div>';
     }).join("") || '<p class="muted">Noch keine frühere Version vorhanden. Sie entsteht beim ersten Speichern.</p>';
     $("#versionModal").classList.remove("hidden");
     document.querySelectorAll<HTMLButtonElement>("[data-restore]").forEach(button => button.onclick = async () => {
@@ -1122,6 +1146,8 @@ syncLinkedButtons();
 renderWizard();
 $("#saveLinkedBtn").onclick = () => void saveLinkedCard();
 $("#addFolderBtn").onclick = () => void addCurrentToFolder();
+$("#backupLinkedBtn").onclick = () => void backupLinkedCard();
+$("#removeLinkedBtn").onclick = () => void removeLinkedCard();
 $("#versionsBtn").onclick = () => void showVersions();
 $("#closeVersions").onclick = () => $("#versionModal").classList.add("hidden");
 $("#versionModal").addEventListener("click", event => { if (event.target === $("#versionModal")) $("#versionModal").classList.add("hidden"); });

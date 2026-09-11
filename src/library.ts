@@ -11,6 +11,7 @@ export interface VersionInfo {
   id: string;
   created: number;
   size: number;
+  manual: boolean;
 }
 
 const invoke = <T>(command: string, args?: Record<string, unknown>) =>
@@ -78,6 +79,18 @@ export class CardLibrary {
     await this.refresh();
     const entry = this.cards.find(card => card.path === path);
     if (entry) await this.open(entry);
+  }
+
+  async backup(path: string) {
+    await invoke("create_card_backup", { path });
+  }
+
+  async remove(path: string): Promise<string> {
+    const recoveryPath = await invoke<string>("remove_character_file", { path });
+    this.favorites.delete(path);
+    localStorage.setItem("favorites", JSON.stringify([...this.favorites]));
+    await this.refresh();
+    return recoveryPath;
   }
 
   private toggleFavorite(path: string) {

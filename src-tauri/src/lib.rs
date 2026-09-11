@@ -252,6 +252,8 @@ pub fn run() {
             read_character_file,
             save_character_file,
             add_character_file,
+            create_card_backup,
+            remove_character_file,
             list_card_versions,
             restore_card_version
         ])
@@ -276,6 +278,7 @@ struct VersionInfo {
     id: String,
     created: u64,
     size: u64,
+    manual: bool,
 }
 
 fn read_u32(data: &[u8], offset: usize) -> Option<usize> {
@@ -401,6 +404,7 @@ fn prune_versions(dir: &Path, keep: usize) -> Result<(), String> {
     let mut items: Vec<_> = fs::read_dir(dir)
         .map_err(|error| error.to_string())?
         .flatten()
+        .filter(|entry| !entry.file_name().to_string_lossy().starts_with("manual-"))
         .collect();
     items.sort_by_key(|entry| std::cmp::Reverse(entry.file_name()));
     for old in items.into_iter().skip(keep) {
@@ -409,9 +413,13 @@ fn prune_versions(dir: &Path, keep: usize) -> Result<(), String> {
     Ok(())
 }
 
-fn make_backup(app: &tauri::AppHandle, card_path: &Path) -> Result<(), String> {
+fn copy_card_version(
+    app: &tauri::AppHandle,
+    card_path: &Path,
+    manual: bool,
+) -> Result<String, String> {
     if !card_path.exists() {
-        return Ok(());
+        return Err("Die Karte existiert nicht mehr.".into());
     }
     let dir = version_dir(app, card_path)?;
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
@@ -423,10 +431,46 @@ fn make_backup(app: &tauri::AppHandle, card_path: &Path) -> Result<(), String> {
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("png");
-    fs::copy(card_path, dir.join(format!("{stamp}.{extension}")))
+    let id = if manual {
+        format!("manual-{stamp}.{extension}")
+    } else {
+        format!("{stamp}.{extension}")
+    };
+    fs::copy(card_path, dir.join(&id))
         .map_err(|error| format!("Version konnte nicht angelegt werden: {error}"))?;
-    prune_versions(&dir, 3)?;
+    if !manual {
+        prune_versions(&dir, 3)?;
+    }
+    Ok(id)
+}
+
+fn make_backup(app: &tauri::AppHandle, card_path: &Path) -> Result<(), String> {
+    if !card_path.exists() {
+        return Ok(());
+    }
+    copy_card_version(app, card_path, false)?;
     Ok(())
+}
+
+fn archive_card(card_path: &Path, recovery_dir: &Path) -> Result<PathBuf, String> {
+    if !allowed_card_path(card_path) {
+        return Err("Nur vorhandene PNG- und JSON-Karten dürfen entfernt werden.".into());
+    }
+    fs::create_dir_all(recovery_dir).map_err(|error| error.to_string())?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_millis();
+    let file_name = card_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Ungültiger Kartenpfad.".to_string())?;
+    let target = recovery_dir.join(format!("{stamp}-{file_name}"));
+    fs::copy(card_path, &target)
+        .map_err(|error| format!("Wiederherstellungskopie konnte nicht erstellt werden: {error}"))?;
+    fs::remove_file(card_path)
+        .map_err(|error| format!("Karte konnte nicht aus SillyTavern entfernt werden: {error}"))?;
+    Ok(target)
 }
 
 #[tauri::command]
@@ -549,6 +593,26 @@ fn add_character_file(folder: String, file_name: String, bytes: Vec<u8>) -> Resu
 }
 
 #[tauri::command]
+fn create_card_backup(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let file = PathBuf::from(path);
+    if !allowed_card_path(&file) {
+        return Err("Nur vorhandene PNG- und JSON-Karten können gesichert werden.".into());
+    }
+    copy_card_version(&app, &file, true)
+}
+
+#[tauri::command]
+fn remove_character_file(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let file = PathBuf::from(path);
+    let recovery_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("removed-cards");
+    archive_card(&file, &recovery_dir).map(|target| target.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 fn list_card_versions(app: tauri::AppHandle, path: String) -> Result<Vec<VersionInfo>, String> {
     let dir = version_dir(&app, Path::new(&path))?;
     if !dir.exists() {
@@ -560,11 +624,14 @@ fn list_card_versions(app: tauri::AppHandle, path: String) -> Result<Vec<Version
         .filter_map(|entry| {
             let meta = entry.metadata().ok()?;
             let name = entry.file_name().to_string_lossy().into_owned();
-            let created = name.split('.').next()?.parse::<u128>().ok()? as u64;
+            let stem = name.split('.').next()?;
+            let manual = stem.starts_with("manual-");
+            let created = stem.strip_prefix("manual-").unwrap_or(stem).parse::<u128>().ok()? as u64;
             Some(VersionInfo {
                 id: name,
                 created,
                 size: meta.len(),
+                manual,
             })
         })
         .collect();
@@ -625,6 +692,7 @@ mod tests {
         for stamp in [100, 200, 300, 400, 500] {
             fs::write(dir.join(format!("{stamp}.png")), stamp.to_string()).unwrap();
         }
+        fs::write(dir.join("manual-50.png"), "protected").unwrap();
         prune_versions(&dir, 3).unwrap();
         let mut names: Vec<_> = fs::read_dir(&dir)
             .unwrap()
@@ -632,7 +700,25 @@ mod tests {
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect();
         names.sort();
-        assert_eq!(names, vec!["300.png", "400.png", "500.png"]);
+        assert_eq!(names, vec!["300.png", "400.png", "500.png", "manual-50.png"]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn removed_card_is_copied_to_recovery_before_source_is_deleted() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("silly-easychar-remove-test-{unique}"));
+        let recovery = dir.join("recovery");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("character.json");
+        fs::write(&source, r#"{"spec":"chara_card_v3","data":{"name":"Safe"}}"#).unwrap();
+        let archived = archive_card(&source, &recovery).unwrap();
+        assert!(!source.exists());
+        assert!(archived.exists());
+        assert_eq!(fs::read_to_string(archived).unwrap(), r#"{"spec":"chara_card_v3","data":{"name":"Safe"}}"#);
         fs::remove_dir_all(dir).unwrap();
     }
 
