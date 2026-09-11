@@ -985,9 +985,12 @@ async function addCurrentToFolder() {
 
 async function backupLinkedCard() {
   if (!linkedPath) return;
+  const requested = prompt("Name für diese Sicherung:", "Vor Experiment");
+  if (requested === null) return;
+  const label = requested.trim() || "Manuelle Sicherung";
   try {
-    await library.backup(linkedPath);
-    toast("Geschützte manuelle Sicherung erstellt.");
+    await library.backup(linkedPath, label);
+    toast(`Geschützte Sicherung „${label}“ erstellt.`);
   } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
 }
 
@@ -1012,7 +1015,8 @@ async function showVersions() {
     $("#versionList").innerHTML = versions.map(version => {
       const date = new Date(version.created).toLocaleString();
       const size = Math.max(1, Math.round(version.size / 1024));
-      return '<div class="version-item"><span><b>' + escapeHtml(date) + '</b><small>' + (version.manual ? 'Manuelle Sicherung · ' : 'Automatische Version · ') + size + ' KB</small></span><button class="ghost" data-restore="' + escapeAttr(version.id) + '">Wiederherstellen</button></div>';
+      const title = version.label?.trim() || date;
+      return '<div class="version-item"><span><b title="' + escapeAttr(date) + '">' + escapeHtml(title) + '</b><small>' + escapeHtml(date) + ' · ' + (version.manual ? 'Manuelle Sicherung · ' : 'Automatische Version · ') + size + ' KB</small></span><div><button class="ghost" data-rename-version="' + escapeAttr(version.id) + '">Umbenennen</button><button class="ghost" data-restore="' + escapeAttr(version.id) + '">Wiederherstellen</button></div></div>';
     }).join("") || '<p class="muted">Noch keine frühere Version vorhanden. Sie entsteht beim ersten Speichern.</p>';
     $("#versionModal").classList.remove("hidden");
     document.querySelectorAll<HTMLButtonElement>("[data-restore]").forEach(button => button.onclick = async () => {
@@ -1020,6 +1024,18 @@ async function showVersions() {
       await library.restore(linkedPath, button.dataset.restore!);
       $("#versionModal").classList.add("hidden");
       toast("Version wiederhergestellt.");
+    });
+    document.querySelectorAll<HTMLButtonElement>("[data-rename-version]").forEach(button => button.onclick = async () => {
+      if (!linkedPath) return;
+      const version = versions.find(item => item.id === button.dataset.renameVersion);
+      if (!version) return;
+      const label = prompt("Neuer Name der Version (leer = wieder Datum anzeigen):", version.label || "");
+      if (label === null) return;
+      try {
+        await library.renameVersion(linkedPath, version.id, label);
+        await showVersions();
+        toast(label.trim() ? "Version umbenannt." : "Versionsname entfernt.");
+      } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
     });
   } catch (error) { toast(error instanceof Error ? error.message : String(error), true); }
 }

@@ -2,6 +2,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -255,6 +256,7 @@ pub fn run() {
             create_card_backup,
             remove_character_file,
             list_card_versions,
+            rename_card_version,
             restore_card_version
         ])
         .run(tauri::generate_context!())
@@ -279,6 +281,60 @@ struct VersionInfo {
     created: u64,
     size: u64,
     manual: bool,
+    label: Option<String>,
+}
+
+fn parse_version_filename(name: &str) -> Option<(u64, bool)> {
+    let stem = name.split('.').next()?;
+    let manual = stem.starts_with("manual-");
+    let created = stem
+        .strip_prefix("manual-")
+        .unwrap_or(stem)
+        .parse::<u128>()
+        .ok()? as u64;
+    Some((created, manual))
+}
+
+fn read_version_labels(dir: &Path) -> HashMap<String, String> {
+    fs::read(dir.join("labels.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn write_version_labels(dir: &Path, labels: &HashMap<String, String>) -> Result<(), String> {
+    let target = dir.join("labels.json");
+    if labels.is_empty() {
+        if target.exists() {
+            fs::remove_file(target).map_err(|error| error.to_string())?;
+        }
+        return Ok(());
+    }
+    fs::write(
+        target,
+        serde_json::to_vec_pretty(labels).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn set_version_label(dir: &Path, id: &str, label: &str) -> Result<(), String> {
+    if Path::new(id).components().count() != 1 || parse_version_filename(id).is_none() {
+        return Err("Ungültige Versions-ID.".into());
+    }
+    if !dir.join(id).is_file() {
+        return Err("Version nicht gefunden.".into());
+    }
+    let clean = label.trim();
+    if clean.chars().count() > 80 || clean.chars().any(char::is_control) {
+        return Err("Der Versionsname darf höchstens 80 Zeichen enthalten.".into());
+    }
+    let mut labels = read_version_labels(dir);
+    if clean.is_empty() {
+        labels.remove(id);
+    } else {
+        labels.insert(id.to_string(), clean.to_string());
+    }
+    write_version_labels(dir, &labels)
 }
 
 fn read_u32(data: &[u8], offset: usize) -> Option<usize> {
@@ -404,12 +460,18 @@ fn prune_versions(dir: &Path, keep: usize) -> Result<(), String> {
     let mut items: Vec<_> = fs::read_dir(dir)
         .map_err(|error| error.to_string())?
         .flatten()
-        .filter(|entry| !entry.file_name().to_string_lossy().starts_with("manual-"))
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            parse_version_filename(&name).is_some_and(|(_, manual)| !manual)
+        })
         .collect();
     items.sort_by_key(|entry| std::cmp::Reverse(entry.file_name()));
     for old in items.into_iter().skip(keep) {
         fs::remove_file(old.path()).map_err(|error| error.to_string())?;
     }
+    let mut labels = read_version_labels(dir);
+    labels.retain(|id, _| dir.join(id).is_file());
+    write_version_labels(dir, &labels)?;
     Ok(())
 }
 
@@ -593,12 +655,15 @@ fn add_character_file(folder: String, file_name: String, bytes: Vec<u8>) -> Resu
 }
 
 #[tauri::command]
-fn create_card_backup(app: tauri::AppHandle, path: String) -> Result<String, String> {
+fn create_card_backup(app: tauri::AppHandle, path: String, label: String) -> Result<String, String> {
     let file = PathBuf::from(path);
     if !allowed_card_path(&file) {
         return Err("Nur vorhandene PNG- und JSON-Karten können gesichert werden.".into());
     }
-    copy_card_version(&app, &file, true)
+    let id = copy_card_version(&app, &file, true)?;
+    let dir = version_dir(&app, &file)?;
+    set_version_label(&dir, &id, &label)?;
+    Ok(id)
 }
 
 #[tauri::command]
@@ -618,16 +683,16 @@ fn list_card_versions(app: tauri::AppHandle, path: String) -> Result<Vec<Version
     if !dir.exists() {
         return Ok(Vec::new());
     }
+    let labels = read_version_labels(&dir);
     let mut items: Vec<_> = fs::read_dir(dir)
         .map_err(|error| error.to_string())?
         .flatten()
         .filter_map(|entry| {
             let meta = entry.metadata().ok()?;
             let name = entry.file_name().to_string_lossy().into_owned();
-            let stem = name.split('.').next()?;
-            let manual = stem.starts_with("manual-");
-            let created = stem.strip_prefix("manual-").unwrap_or(stem).parse::<u128>().ok()? as u64;
+            let (created, manual) = parse_version_filename(&name)?;
             Some(VersionInfo {
+                label: labels.get(&name).cloned(),
                 id: name,
                 created,
                 size: meta.len(),
@@ -637,6 +702,17 @@ fn list_card_versions(app: tauri::AppHandle, path: String) -> Result<Vec<Version
         .collect();
     items.sort_by_key(|version| std::cmp::Reverse(version.created));
     Ok(items)
+}
+
+#[tauri::command]
+fn rename_card_version(
+    app: tauri::AppHandle,
+    path: String,
+    id: String,
+    label: String,
+) -> Result<(), String> {
+    let dir = version_dir(&app, Path::new(&path))?;
+    set_version_label(&dir, &id, &label)
 }
 
 #[tauri::command]
@@ -701,6 +777,22 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, vec!["300.png", "400.png", "500.png", "manual-50.png"]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn version_labels_can_be_changed_and_removed_without_renaming_snapshot_files() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("silly-easychar-label-test-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("manual-100.png"), "card").unwrap();
+        set_version_label(&dir, "manual-100.png", "Vor großem Experiment").unwrap();
+        assert_eq!(read_version_labels(&dir)["manual-100.png"], "Vor großem Experiment");
+        set_version_label(&dir, "manual-100.png", "").unwrap();
+        assert!(read_version_labels(&dir).is_empty());
         fs::remove_dir_all(dir).unwrap();
     }
 

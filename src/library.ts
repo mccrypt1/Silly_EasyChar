@@ -12,6 +12,7 @@ export interface VersionInfo {
   created: number;
   size: number;
   manual: boolean;
+  label?: string;
 }
 
 const invoke = <T>(command: string, args?: Record<string, unknown>) =>
@@ -81,8 +82,12 @@ export class CardLibrary {
     if (entry) await this.open(entry);
   }
 
-  async backup(path: string) {
-    await invoke("create_card_backup", { path });
+  async backup(path: string, label: string) {
+    await invoke("create_card_backup", { path, label });
+  }
+
+  async renameVersion(path: string, id: string, label: string) {
+    await invoke("rename_card_version", { path, id, label });
   }
 
   async remove(path: string): Promise<string> {
