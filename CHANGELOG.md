@@ -2,6 +2,28 @@
 
 All notable changes to Silly EasyChar are documented here. Each release lists English notes first, followed by the German translation.
 
+## v0.3.7
+
+### English
+
+- Added field-by-field version comparison and selective restore for greetings, individual dialogue examples, metadata, lorebooks, portraits, and unknown V3 data.
+- Added 100-step session undo/redo, configurable deduplicated automatic backup retention, external-file fingerprints and an explicit save-conflict workflow.
+- Added uniquely named experiment copies and a local recovery-bin UI with previews, collision-safe restore, legacy recovery support, and double confirmation before permanent deletion.
+- Added estimated token savings and prompt-use labels to AI reviews, plus isolated selected-text editing with stale-source protection.
+- Added a bundled offline CodeMirror V3 editor with search, formatting, validation, and lossless preservation of unknown V3 properties.
+- Renamed JSON export to “JSON without image”; it contains no portrait bytes while retaining compatible V3 asset metadata.
+- Added visible, non-affiliation attribution to Marinara Engine and Pasta-Devs as workflow inspiration. No Marinara source code is included.
+
+### Deutsch
+
+- Feldweisen Versionsvergleich und selektive Wiederherstellung für Begrüßungen, einzelne Dialogbeispiele, Metadaten, Lorebooks, Portraits und unbekannte V3-Daten ergänzt.
+- Sitzungsweites Undo/Redo mit 100 Schritten, konfigurierbare deduplizierte Aufbewahrung automatischer Versionen, Dateifingerprints und einen ausdrücklichen Speicherkonflikt-Dialog ergänzt.
+- Eindeutig benannte Experimentkopien sowie eine lokale Papierkorbansicht mit Vorschau, kollisionsfreier Wiederherstellung, Unterstützung älterer Sicherungen und doppelter Bestätigung vor endgültigem Löschen ergänzt.
+- Geschätzte Tokenersparnis und Hinweise zur Prompt-Nutzung in KI-Prüfungen sowie isolierte Bearbeitung markierter Texte mit Schutz vor zwischenzeitlichen Feldänderungen ergänzt.
+- Offline gebündelten CodeMirror-V3-Editor mit Suche, Formatierung, Validierung und verlustfreiem Erhalt unbekannter V3-Eigenschaften ergänzt.
+- JSON-Export sichtbar in „JSON ohne Bild“ umbenannt; er enthält keine Portraitdaten, behält aber kompatible V3-Asset-Metadaten.
+- Sichtbaren, nicht verbundenen Inspirationshinweis auf Marinara Engine und Pasta-Devs ergänzt. Es wurde kein Marinara-Quellcode übernommen.
+
 ## v0.3.6
 
 ### English
