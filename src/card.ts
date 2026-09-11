@@ -27,6 +27,7 @@ export const emptyData = (): CharacterData => ({
 export const emptyCard = (): CharacterCard => ({ spec: "chara_card_v3", spec_version: "3.0", data: emptyData() });
 
 export function normalizeCard(input: any): CharacterCard {
+  const root = input?.data && typeof input.data === "object" ? input : {};
   const source = input?.data && typeof input.data === "object" ? input.data : input ?? {};
   const defaults = emptyData();
   const data: CharacterData = {
@@ -54,7 +55,7 @@ export function normalizeCard(input: any): CharacterCard {
     modification_date: Number.isFinite(source.modification_date) ? Number(source.modification_date) : defaults.modification_date,
     character_book: normalizeBook(source.character_book)
   };
-  return normalizeCardPlaceholders({ spec: "chara_card_v3", spec_version: "3.0", data });
+  return normalizeCardPlaceholders({ ...root, spec: "chara_card_v3", spec_version: "3.0", data });
 }
 
 const placeholderFields: CoreEditableField[] = [
@@ -124,10 +125,13 @@ export function toV3Card(card: CharacterCard): CharacterCard {
   if (output.data.character_book) {
     const source = output.data.character_book;
     output.data.character_book = {
+      ...source,
       name: source.name,
       description: source.description,
       extensions: source.extensions ?? {},
-      entries: (source.entries ?? []).map((entry: any) => ({
+      entries: (source.entries ?? []).map((entry: any) => {
+        const projected: any = {
+        ...entry,
         keys: entry.key ?? entry.keys ?? [],
         content: entry.content ?? "",
         extensions: entry.extensions ?? {},
@@ -147,7 +151,10 @@ export function toV3Card(card: CharacterCard): CharacterCard {
         selectiveLogic: Number(entry.selectiveLogic ?? 0),
         excludeRecursion: !!entry.excludeRecursion,
         preventRecursion: !!entry.preventRecursion
-      }))
+        };
+        for (const key of ["uid", "key", "keysecondary", "disable", "order", "addMemo", "selectiveLogic", "useProbability", "delay", "cooldown", "sticky", "vectorized", "ignoreBudget"]) delete projected[key];
+        return projected;
+      })
     };
   }
   return output;
@@ -156,13 +163,14 @@ export function toV3Card(card: CharacterCard): CharacterCard {
 function normalizeBook(book: any): CharacterData["character_book"] {
   if (!book) return null;
   const raw: any[] = Array.isArray(book.entries) ? book.entries : Object.values(book.entries ?? {});
-  return { name: String(book.name ?? "Lorebook"), description: String(book.description ?? ""), entries: raw.map((e: any, i: number) => normalizeLoreEntry(e, i)) };
+  return { ...book, name: String(book.name ?? "Lorebook"), description: String(book.description ?? ""), extensions: book.extensions && typeof book.extensions === "object" ? book.extensions : {}, entries: raw.map((e: any, i: number) => normalizeLoreEntry(e, i)) };
 }
 
 export function normalizeLoreEntry(e: any, uid: number): LoreEntry {
   const primaryKeys = Array.isArray(e?.key) ? e.key : Array.isArray(e?.keys) ? e.keys : [];
   const secondaryKeys = Array.isArray(e?.keysecondary) ? e.keysecondary : Array.isArray(e?.secondary_keys) ? e.secondary_keys : [];
   return {
+    ...e,
     uid: Number(e?.uid ?? e?.id ?? uid), key: primaryKeys.map(String), keysecondary: secondaryKeys.map(String),
     comment: String(e?.comment ?? e?.name ?? `Eintrag ${uid + 1}`), content: String(e?.content ?? ""), constant: !!e?.constant,
     selective: secondaryKeys.length > 0 ? !!e?.selective : false,

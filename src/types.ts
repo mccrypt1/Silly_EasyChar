@@ -1,4 +1,5 @@
 export interface LoreEntry {
+  [key: string]: unknown;
   uid: number;
   key: string[];
   keysecondary: string[];
@@ -31,6 +32,7 @@ export interface CharacterAsset {
 }
 
 export interface CharacterData {
+  [key: string]: unknown;
   name: string;
   description: string;
   personality: string;
@@ -45,7 +47,7 @@ export interface CharacterData {
   creator: string;
   character_version: string;
   extensions: Record<string, unknown>;
-  character_book?: { name?: string; description?: string; entries: LoreEntry[] } | null;
+  character_book?: { [key: string]: unknown; name?: string; description?: string; extensions?: Record<string, unknown>; entries: LoreEntry[] } | null;
   assets?: CharacterAsset[];
   nickname?: string;
   creator_notes_multilingual?: Record<string, string>;
@@ -56,6 +58,7 @@ export interface CharacterData {
 }
 
 export interface CharacterCard {
+  [key: string]: unknown;
   spec: "chara_card_v2" | "chara_card_v3";
   spec_version: "2.0" | "3.0";
   data: CharacterData;
@@ -73,6 +76,20 @@ export interface AiResult {
   explanation?: string;
   score?: ScoreResult;
   lorebook?: { entries: Record<string, LoreEntry> };
+}
+
+export interface CardDiff {
+  path: string;
+  label: string;
+  before: unknown;
+  after: unknown;
+  kind: "text" | "json" | "portrait";
+}
+
+export interface UndoEntry {
+  card: CharacterCard;
+  image: ArrayBuffer | null;
+  label: string;
 }
 
 export interface ScoreResult {

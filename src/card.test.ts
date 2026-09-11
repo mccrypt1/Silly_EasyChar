@@ -74,3 +74,21 @@ describe("SillyTavern placeholders", () => {
     expect(normalizeCard({ data: { extensions: { talkativeness: "0.75" } } }).data.extensions.talkativeness).toBe("0.75");
     expect(normalizeCard({ data: { talkativeness: "0.8" } }).data.extensions.talkativeness).toBe("0.8");
   });
+
+  it("preserves unknown V3 data at every supported level", () => {
+    const source: any = {
+      spec: "chara_card_v3", spec_version: "3.0", vendor_root: { enabled: true },
+      data: { name: "Extension test", vendor_data: [1, 2, 3], character_book: { name: "Book", vendor_book: "kept", entries: [{ id: 4, keys: ["x"], content: "Lore", vendor_entry: { color: "violet" } }] } }
+    };
+    const exported: any = toV3Card(normalizeCard(source));
+    expect(exported.vendor_root).toEqual({ enabled: true });
+    expect(exported.data.vendor_data).toEqual([1, 2, 3]);
+    expect(exported.data.character_book.vendor_book).toBe("kept");
+    expect(exported.data.character_book.entries[0].vendor_entry).toEqual({ color: "violet" });
+  });
+
+  it("exports V3 JSON without embedded image data while retaining asset metadata", () => {
+    const json = JSON.stringify(toV3Card(prepareCardForExport(emptyCard())));
+    expect(json).not.toContain("data:image/");
+    expect(JSON.parse(json).data.assets[0].uri).toBe("ccdefault:");
+  });
