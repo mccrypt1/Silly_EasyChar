@@ -98,3 +98,19 @@ from [Marinara Engine by Pasta-Devs](https://github.com/Pasta-Devs/Marinara-Engi
 is an independent project and is not official, endorsed, certified, or supported by Pasta-Devs.
 No Marinara Engine source code is included. See [CREDITS.md](CREDITS.md) for dependencies and
 attribution.
+
+## License
+
+Copyright (c) 2026 mccrypt1
+
+Silly EasyChar is free to use, modify and redistribute. When redistributing the project or
+substantial portions of it, keep the copyright notice and this permission statement. Third-party
+dependencies and separately credited projects retain their own licenses; see [CREDITS.md](CREDITS.md).
+
+The complete project notice is also available in [LICENSE](LICENSE).
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit issues or pull requests. By contributing,
+you agree that your contribution may be used, modified and redistributed under the same project
+terms unless you state otherwise in the contribution.
