@@ -7,7 +7,7 @@ Silly EasyChar is a private-first Windows desktop studio for creating and improv
 - Structured editor for the core Character Card V3 fields with V2 PNG compatibility
 - JSON and PNG import/export (synchronized `chara` and `ccv3` PNG chunks)
 - Explicit **JSON without image** export that retains compatible V3 asset metadata but never embeds portrait bytes
-- Original portrait attachment without image processing
+- Local portrait import with an optional 4:5 crop to 768 × 960 and a choice to keep the original image
 - Field-aware rewriting and translation through local Ollama
 - NSFW switch that preserves consensual fictional adult content instead of silently sanitizing it
 - Local and Ollama-assisted card grading
@@ -42,13 +42,15 @@ Ollama defaults to `http://127.0.0.1:11434`. Install at least one capable instru
 
 ## Data and privacy
 
-Character data is saved as a local WebView draft. AI requests are accepted only for `localhost`, `127.0.0.1`, or `::1`; the Rust backend rejects remote URLs. Exported files are created directly in the UI and no card data is uploaded.
+Character data is saved as a local WebView draft. AI requests are sent only to a validated `http://localhost`, `http://127.0.0.1`, or `http://::1` address. The Rust backend rejects every other URL, refuses HTTP redirects, and stops a local request that exceeds its timeout. Card text is not sent anywhere else. Character-card reads, overwrites, and recovery restores stay inside the folder you coupled. Version history and the recovery bin stay in the application's own data directory. Exported files are written only through the native save dialog.
 
 Automatic and manual versions live below the application's local data directory in `versions`. Safely removed cards and their recovery manifests live in `removed-cards`. They are never sent to Ollama. The technical log contains only fixed operation/error codes, never prompts or card text.
 
 ## Format notes
 
 PNG export embeds a clean V2 compatibility card in the standard `chara` text chunk and the preferred Character Card V3 object in `ccv3`. **JSON without image** exports V3 text only; standard asset declarations such as `ccdefault:` remain for importer compatibility, but no PNG or base64 image data is included. Import normalizes V1-style, V2, and V3 data into the V3 editor model while preserving known and unknown V3 properties.
+
+Export and saving back to SillyTavern append one trailing Creator Notes line, `Crafted / Reforged / Translated with mccrypt1´s Silly EasyChar Studio`. The line is added to the exported card only; the editable field is left unchanged, and an existing copy of the line is not duplicated.
 
 ## SillyTavern folder library
 

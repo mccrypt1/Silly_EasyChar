@@ -7,7 +7,8 @@ const labels: Record<string, string> = {
   first_mes: "Erste Nachricht", mes_example: "Dialogbeispiele", creator_notes: "Creator Notes",
   system_prompt: "System Prompt", post_history_instructions: "Post-History Instructions",
   tags: "Tags", creator: "Creator", character_version: "Version", extensions: "Erweiterungen",
-  character_book: "Lorebook", group_only_greetings: "Gruppenbegrüßungen"
+  character_book: "Lorebook", group_only_greetings: "Gruppenbegrüßungen",
+  creation_date: "Erstellungsdatum", modification_date: "Änderungsdatum"
 };
 
 export function estimateTokens(text: string): number {
@@ -38,7 +39,7 @@ export function diffCards(current: CharacterCard, snapshot: CharacterCard, portr
   const beforeExamples = splitExamples(String(snapshot.data.mes_example ?? ""));
   const afterExamples = splitExamples(String(current.data.mes_example ?? ""));
   for (let index = 0; index < Math.max(beforeExamples.length, afterExamples.length); index++) add(output, `/dialogue/${index}`, `Dialogbeispiel ${index + 1}`, beforeExamples[index] ?? "", afterExamples[index] ?? "");
-  for (const key of ["tags", "extensions", "group_only_greetings", "character_book", "assets", "nickname", "creator_notes_multilingual", "source", "creation_date"]) add(output, `/data/${key}`, labels[key] ?? key, snapshot.data[key], current.data[key], "json");
+  for (const key of ["tags", "extensions", "group_only_greetings", "character_book", "assets", "nickname", "creator_notes_multilingual", "source", "creation_date", "modification_date"]) add(output, `/data/${key}`, labels[key] ?? key, snapshot.data[key], current.data[key], "json");
   const knownRoot = new Set(["spec", "spec_version", "data"]);
   const knownData = new Set(["name", "description", "personality", "scenario", "first_mes", "mes_example", "creator_notes", "system_prompt", "post_history_instructions", "alternate_greetings", "tags", "creator", "character_version", "extensions", "character_book", "assets", "nickname", "creator_notes_multilingual", "source", "group_only_greetings", "creation_date", "modification_date"]);
   const dataBefore = Object.fromEntries(Object.entries(snapshot.data).filter(([key]) => !knownData.has(key)));

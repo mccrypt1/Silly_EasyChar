@@ -177,6 +177,306 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the add_character_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-add-character-file",
+          "markdownDescription": "Enables the add_character_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the build_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-build-info",
+          "markdownDescription": "Enables the build_info command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the choose_character_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-choose-character-folder",
+          "markdownDescription": "Enables the choose_character_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the create_card_backup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-card-backup",
+          "markdownDescription": "Enables the create_card_backup command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_removed_card command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-removed-card",
+          "markdownDescription": "Enables the delete_removed_card command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the duplicate_character_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-duplicate-character-file",
+          "markdownDescription": "Enables the duplicate_character_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the error_log_location command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-error-log-location",
+          "markdownDescription": "Enables the error_log_location command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the export_character_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-export-character-file",
+          "markdownDescription": "Enables the export_character_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_card_versions command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-card-versions",
+          "markdownDescription": "Enables the list_card_versions command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_recovery_cards command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-recovery-cards",
+          "markdownDescription": "Enables the list_recovery_cards command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ollama_chat command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ollama-chat",
+          "markdownDescription": "Enables the ollama_chat command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ollama_models command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ollama-models",
+          "markdownDescription": "Enables the ollama_models command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_marinara_repository command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-marinara-repository",
+          "markdownDescription": "Enables the open_marinara_repository command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_repository command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-repository",
+          "markdownDescription": "Enables the open_repository command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the read_card_version command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-read-card-version",
+          "markdownDescription": "Enables the read_card_version command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the read_character_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-read-character-file",
+          "markdownDescription": "Enables the read_character_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the read_character_file_with_fingerprint command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-read-character-file-with-fingerprint",
+          "markdownDescription": "Enables the read_character_file_with_fingerprint command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the read_recovery_card command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-read-recovery-card",
+          "markdownDescription": "Enables the read_recovery_card command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the remove_character_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-remove-character-file",
+          "markdownDescription": "Enables the remove_character_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the rename_card_version command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-rename-card-version",
+          "markdownDescription": "Enables the rename_card_version command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the restore_card_version command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-restore-card-version",
+          "markdownDescription": "Enables the restore_card_version command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the restore_removed_card command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-restore-removed-card",
+          "markdownDescription": "Enables the restore_removed_card command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_character_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-character-file",
+          "markdownDescription": "Enables the save_character_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scan_character_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-scan-character-folder",
+          "markdownDescription": "Enables the scan_character_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the write_error_log command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-write-error-log",
+          "markdownDescription": "Enables the write_error_log command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the add_character_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-add-character-file",
+          "markdownDescription": "Denies the add_character_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the build_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-build-info",
+          "markdownDescription": "Denies the build_info command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the choose_character_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-choose-character-folder",
+          "markdownDescription": "Denies the choose_character_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_card_backup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-card-backup",
+          "markdownDescription": "Denies the create_card_backup command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_removed_card command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-removed-card",
+          "markdownDescription": "Denies the delete_removed_card command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the duplicate_character_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-duplicate-character-file",
+          "markdownDescription": "Denies the duplicate_character_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the error_log_location command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-error-log-location",
+          "markdownDescription": "Denies the error_log_location command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the export_character_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-export-character-file",
+          "markdownDescription": "Denies the export_character_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_card_versions command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-card-versions",
+          "markdownDescription": "Denies the list_card_versions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_recovery_cards command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-recovery-cards",
+          "markdownDescription": "Denies the list_recovery_cards command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ollama_chat command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ollama-chat",
+          "markdownDescription": "Denies the ollama_chat command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ollama_models command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ollama-models",
+          "markdownDescription": "Denies the ollama_models command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_marinara_repository command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-marinara-repository",
+          "markdownDescription": "Denies the open_marinara_repository command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_repository command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-repository",
+          "markdownDescription": "Denies the open_repository command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the read_card_version command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-read-card-version",
+          "markdownDescription": "Denies the read_card_version command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the read_character_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-read-character-file",
+          "markdownDescription": "Denies the read_character_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the read_character_file_with_fingerprint command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-read-character-file-with-fingerprint",
+          "markdownDescription": "Denies the read_character_file_with_fingerprint command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the read_recovery_card command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-read-recovery-card",
+          "markdownDescription": "Denies the read_recovery_card command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the remove_character_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-remove-character-file",
+          "markdownDescription": "Denies the remove_character_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the rename_card_version command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-rename-card-version",
+          "markdownDescription": "Denies the rename_card_version command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the restore_card_version command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-restore-card-version",
+          "markdownDescription": "Denies the restore_card_version command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the restore_removed_card command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-restore-removed-card",
+          "markdownDescription": "Denies the restore_removed_card command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_character_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-character-file",
+          "markdownDescription": "Denies the save_character_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scan_character_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-scan-character-folder",
+          "markdownDescription": "Denies the scan_character_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the write_error_log command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-write-error-log",
+          "markdownDescription": "Denies the write_error_log command without any pre-configured scope."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

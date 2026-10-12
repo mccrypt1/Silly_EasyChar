@@ -22,10 +22,19 @@ export interface RecoveryEntry { id: string; cardName: string; fileName: string;
 const invoke = <T>(command: string, args?: Record<string, unknown>) =>
   window.__TAURI__!.core.invoke<T>(command, args);
 
+export function parseFavoritePaths(raw: string | null): string[] {
+  try {
+    const parsed = JSON.parse(raw || "[]");
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 export class CardLibrary {
   folder = localStorage.getItem("characterFolder") || "";
   cards: LibraryEntry[] = [];
-  favorites = new Set<string>(JSON.parse(localStorage.getItem("favorites") || "[]"));
+  favorites = new Set<string>(parseFavoritePaths(localStorage.getItem("favorites")));
   private host: HTMLElement | null = null;
   private query = "";
   private favoritesOnly = false;
@@ -39,12 +48,17 @@ export class CardLibrary {
   }
 
   async connect() {
-    const folder = await invoke<string | null>("choose_character_folder");
-    if (!folder) return;
-    this.folder = folder;
-    localStorage.setItem("characterFolder", folder);
-    await this.refresh();
-    window.dispatchEvent(new Event("library-folder-changed"));
+    try {
+      const folder = await invoke<string | null>("choose_character_folder");
+      if (!folder) return;
+      this.folder = folder;
+      localStorage.setItem("characterFolder", folder);
+      await this.refresh();
+      window.dispatchEvent(new Event("library-folder-changed"));
+    } catch (error) {
+      this.cards = [];
+      this.render(error instanceof Error ? error.message : String(error));
+    }
   }
 
   async refresh() {

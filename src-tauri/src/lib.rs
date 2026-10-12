@@ -6,7 +6,7 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    time::UNIX_EPOCH,
+    time::{Duration, UNIX_EPOCH},
 };
 use tauri::Manager;
 
@@ -53,6 +53,9 @@ fn approved_operation(value: &str) -> &'static str {
         "ai_grade" => "ai_grade",
         "ai_lorebook" => "ai_lorebook",
         "ai_optimize" => "ai_optimize",
+        "ai_selection" => "ai_selection",
+        "greeting_library_title" => "greeting_library_title",
+        "greeting_library_improve" => "greeting_library_improve",
         "wizard_name" => "wizard_name",
         "wizard_description" => "wizard_description",
         "wizard_personality" => "wizard_personality",
@@ -171,14 +174,39 @@ fn safe_base_url(input: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
+const OLLAMA_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const MAX_CARD_BYTES: u64 = 64 * 1024 * 1024;
+
+fn exceeds_card_limit(len: u64) -> bool {
+    len > MAX_CARD_BYTES
+}
+
+fn ollama_client(timeout: Duration) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(timeout)
+        .build()
+        .map_err(|error| format!("Ollama-Client konnte nicht erstellt werden: {error}"))
+}
+
+fn ollama_transport_error(error: reqwest::Error, fallback: &str) -> String {
+    if error.is_timeout() {
+        return "Ollama-Timeout: Die lokale Anfrage wurde abgebrochen.".into();
+    }
+    if error.is_redirect() {
+        return "Die Ollama-Antwort wurde abgelehnt, weil der lokale Server eine Weiterleitung versucht hat.".into();
+    }
+    format!("{fallback}: {error}")
+}
+
 #[tauri::command]
 async fn ollama_models(base_url: String) -> Result<Vec<String>, String> {
     let base = safe_base_url(&base_url)?;
-    let result = reqwest::Client::new()
+    let result = ollama_client(OLLAMA_TIMEOUT)?
         .get(format!("{base}/api/tags"))
         .send()
         .await
-        .map_err(|e| format!("Ollama nicht erreichbar: {e}"))?;
+        .map_err(|error| ollama_transport_error(error, "Ollama nicht erreichbar"))?;
     if !result.status().is_success() {
         return Err(format!("Ollama antwortet mit HTTP {}.", result.status()));
     }
@@ -219,12 +247,12 @@ async fn ollama_chat(
             temperature: 0.65,
         },
     };
-    let result = reqwest::Client::new()
+    let result = ollama_client(OLLAMA_TIMEOUT)?
         .post(format!("{base}/api/chat"))
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("Ollama-Anfrage fehlgeschlagen: {e}"))?;
+        .map_err(|error| ollama_transport_error(error, "Ollama-Anfrage fehlgeschlagen"))?;
     if !result.status().is_success() {
         let status = result.status();
         let text = result.text().await.unwrap_or_default();
@@ -357,6 +385,10 @@ struct RecoveryEntry {
     legacy: bool,
 }
 
+fn valid_version_id(id: &str) -> bool {
+    Path::new(id).components().count() == 1 && parse_version_filename(id).is_some()
+}
+
 fn parse_version_filename(name: &str) -> Option<(u64, bool)> {
     let stem = name.split('.').next()?;
     let manual = stem.starts_with("manual-");
@@ -391,7 +423,7 @@ fn write_version_labels(dir: &Path, labels: &HashMap<String, String>) -> Result<
 }
 
 fn set_version_label(dir: &Path, id: &str, label: &str) -> Result<(), String> {
-    if Path::new(id).components().count() != 1 || parse_version_filename(id).is_none() {
+    if !valid_version_id(id) {
         return Err("Ungültige Versions-ID.".into());
     }
     if !dir.join(id).is_file() {
@@ -478,7 +510,145 @@ fn allowed_card_path(path: &Path) -> bool {
             .unwrap_or(false)
 }
 
+fn linked_folder_record(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("linked-folder.txt"))
+}
+
+fn stored_linked_folder(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let text = fs::read_to_string(linked_folder_record(app)?)
+        .map_err(|_| "Bitte den SillyTavern-Ordner erneut koppeln.".to_string())?;
+    let path = PathBuf::from(text.trim());
+    if path.as_os_str().is_empty() {
+        return Err("Bitte den SillyTavern-Ordner erneut koppeln.".into());
+    }
+    Ok(path)
+}
+
+fn linked_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let stored = stored_linked_folder(app)?;
+    let root = fs::canonicalize(&stored)
+        .map_err(|_| "Der gekoppelte Ordner existiert nicht mehr.".to_string())?;
+    if !root.is_dir() {
+        return Err("Der gekoppelte Ordner existiert nicht mehr.".into());
+    }
+    Ok(root)
+}
+
+fn store_linked_folder(app: &tauri::AppHandle, folder: &Path) -> Result<(), String> {
+    let root = fs::canonicalize(folder)
+        .map_err(|error| format!("Ordner konnte nicht gespeichert werden: {error}"))?;
+    if !root.is_dir() {
+        return Err("Der gewählte Pfad ist kein Ordner.".into());
+    }
+    let record = linked_folder_record(app)?;
+    if let Some(parent) = record.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::write(record, folder.to_string_lossy().as_bytes()).map_err(|error| error.to_string())
+}
+
+fn canonical_inside_root(root: &Path, path: &Path) -> Result<PathBuf, String> {
+    let root = fs::canonicalize(root).map_err(|error| error.to_string())?;
+    let canonical = fs::canonicalize(path).map_err(|error| error.to_string())?;
+    if !canonical.starts_with(&root) {
+        return Err("Die Datei liegt außerhalb des gekoppelten SillyTavern-Ordners.".into());
+    }
+    Ok(canonical)
+}
+
+fn require_linked_directory(app: &tauri::AppHandle, folder: &Path) -> Result<PathBuf, String> {
+    let root = linked_root(app)?;
+    let requested = fs::canonicalize(folder)
+        .map_err(|_| "Bitte den SillyTavern-Ordner erneut koppeln.".to_string())?;
+    if requested != root {
+        return Err("Bitte den SillyTavern-Ordner erneut koppeln.".into());
+    }
+    stored_linked_folder(app)
+}
+
+fn require_linked_card(app: &tauri::AppHandle, path: &Path) -> Result<PathBuf, String> {
+    let root = linked_root(app)?;
+    if !allowed_card_path(path) {
+        return Err("Nur vorhandene PNG- und JSON-Karten dürfen geöffnet werden.".into());
+    }
+    canonical_inside_root(&root, path)?;
+    let len = fs::metadata(path).map_err(|error| error.to_string())?.len();
+    if exceeds_card_limit(len) {
+        return Err("Die Karte ist größer als 64 MB.".into());
+    }
+    Ok(path.to_path_buf())
+}
+
+fn directory_inside_root(root: &Path, directory: &Path) -> Result<(), String> {
+    let mut existing = directory.to_path_buf();
+    while !existing.exists() {
+        let Some(name) = existing.file_name() else {
+            return Err("Ungültiger Zielordner.".into());
+        };
+        if name == "." || name == ".." {
+            return Err("Ungültiger Zielordner.".into());
+        }
+        existing = existing
+            .parent()
+            .ok_or_else(|| "Ungültiger Zielordner.".to_string())?
+            .to_path_buf();
+    }
+    let canonical = fs::canonicalize(&existing).map_err(|error| error.to_string())?;
+    let root = fs::canonicalize(root).map_err(|error| error.to_string())?;
+    if canonical != root && !canonical.starts_with(&root) {
+        return Err(
+            "Die Wiederherstellung ist nur im gekoppelten SillyTavern-Ordner erlaubt.".into(),
+        );
+    }
+    Ok(())
+}
+
+fn card_destination_inside_root(root: &Path, destination: &Path) -> Result<(), String> {
+    let Some(name) = destination.file_name() else {
+        return Err("Ungültiger Kartenpfad.".into());
+    };
+    if name == "." || name == ".." || Path::new(name).components().count() != 1 {
+        return Err("Ungültiger Kartenpfad.".into());
+    }
+    let parent = destination
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| "Ungültiger Kartenpfad.".to_string())?;
+    directory_inside_root(root, parent)
+}
+
+fn recovery_file_name(id: &str) -> Result<&str, String> {
+    let name = id.split_once('-').map(|(_, name)| name).unwrap_or(id);
+    if Path::new(name).components().count() != 1 {
+        return Err("Ungültiger Dateiname.".into());
+    }
+    Ok(name)
+}
+
+fn recovery_destination(
+    root: &Path,
+    stored_folder: &Path,
+    original_path: Option<&Path>,
+    file_name: &str,
+) -> Result<PathBuf, String> {
+    if let Some(original) = original_path {
+        if card_destination_inside_root(root, original).is_ok() {
+            return Ok(original.to_path_buf());
+        }
+    }
+    let fallback = stored_folder.join(file_name);
+    card_destination_inside_root(root, &fallback)?;
+    Ok(fallback)
+}
+
 fn collect_cards(dir: &Path, output: &mut Vec<LibraryCard>) {
+    let Ok(root) = fs::canonicalize(dir) else {
+        return;
+    };
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -490,9 +660,15 @@ fn collect_cards(dir: &Path, output: &mut Vec<LibraryCard>) {
         if !allowed_card_path(&path) {
             continue;
         }
+        if canonical_inside_root(&root, &path).is_err() {
+            continue;
+        }
         let Ok(meta) = entry.metadata() else {
             continue;
         };
+        if exceeds_card_limit(meta.len()) {
+            continue;
+        }
         let Some(name) = card_name(&path) else {
             continue;
         };
@@ -717,12 +893,17 @@ fn unique_target(path: PathBuf) -> PathBuf {
 }
 
 #[tauri::command]
-async fn choose_character_folder() -> Option<String> {
-    rfd::AsyncFileDialog::new()
+async fn choose_character_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let Some(handle) = rfd::AsyncFileDialog::new()
         .set_title("SillyTavern-Character-Ordner auswählen")
         .pick_folder()
         .await
-        .map(|handle| handle.path().to_string_lossy().into_owned())
+    else {
+        return Ok(None);
+    };
+    let folder = handle.path().to_path_buf();
+    store_linked_folder(&app, &folder)?;
+    Ok(Some(folder.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
@@ -730,7 +911,7 @@ async fn export_character_file(
     file_name: String,
     bytes: Vec<u8>,
 ) -> Result<Option<String>, String> {
-    if bytes.len() > 64 * 1024 * 1024 {
+    if exceeds_card_limit(bytes.len() as u64) {
         return Err("Die Karte ist größer als 64 MB.".into());
     }
     let safe_name = Path::new(&file_name)
@@ -761,11 +942,8 @@ async fn export_character_file(
 }
 
 #[tauri::command]
-fn scan_character_folder(path: String) -> Result<Vec<LibraryCard>, String> {
-    let dir = PathBuf::from(path);
-    if !dir.is_dir() {
-        return Err("Der gekoppelte Ordner existiert nicht mehr.".into());
-    }
+fn scan_character_folder(app: tauri::AppHandle, path: String) -> Result<Vec<LibraryCard>, String> {
+    let dir = require_linked_directory(&app, Path::new(&path))?;
     let mut cards = Vec::new();
     collect_cards(&dir, &mut cards);
     cards.sort_by_key(|card| std::cmp::Reverse(card.modified));
@@ -773,21 +951,16 @@ fn scan_character_folder(path: String) -> Result<Vec<LibraryCard>, String> {
 }
 
 #[tauri::command]
-fn read_character_file(path: String) -> Result<Vec<u8>, String> {
-    let file = PathBuf::from(path);
-    if !allowed_card_path(&file) {
-        return Err("Nur vorhandene PNG- und JSON-Karten dürfen geöffnet werden.".into());
-    }
-    let meta = fs::metadata(&file).map_err(|error| error.to_string())?;
-    if meta.len() > 64 * 1024 * 1024 {
-        return Err("Die Karte ist größer als 64 MB.".into());
-    }
-    fs::read(file).map_err(|error| error.to_string())
+fn read_character_file(app: tauri::AppHandle, path: String) -> Result<Vec<u8>, String> {
+    fs::read(require_linked_card(&app, Path::new(&path))?).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn read_character_file_with_fingerprint(path: String) -> Result<ReadCardResult, String> {
-    let bytes = read_character_file(path.clone())?;
+fn read_character_file_with_fingerprint(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<ReadCardResult, String> {
+    let bytes = read_character_file(app, path.clone())?;
     Ok(ReadCardResult {
         bytes,
         fingerprint: file_fingerprint(Path::new(&path))?,
@@ -803,11 +976,8 @@ fn save_character_file(
     force: Option<bool>,
     backup_keep: Option<usize>,
 ) -> Result<SaveCardResult, String> {
-    let file = PathBuf::from(&path);
-    if !allowed_card_path(&file) {
-        return Err("Die Zieldatei muss eine vorhandene PNG- oder JSON-Karte sein.".into());
-    }
-    if bytes.len() > 64 * 1024 * 1024 {
+    let file = require_linked_card(&app, Path::new(&path))?;
+    if exceeds_card_limit(bytes.len() as u64) {
         return Err("Die Karte ist größer als 64 MB.".into());
     }
     let current = file_fingerprint(&file)?;
@@ -826,11 +996,16 @@ fn save_character_file(
 }
 
 #[tauri::command]
-fn add_character_file(folder: String, file_name: String, bytes: Vec<u8>) -> Result<String, String> {
-    let dir = fs::canonicalize(folder).map_err(|error| error.to_string())?;
-    if !dir.is_dir() {
-        return Err("Der gekoppelte Ordner existiert nicht.".into());
+fn add_character_file(
+    app: tauri::AppHandle,
+    folder: String,
+    file_name: String,
+    bytes: Vec<u8>,
+) -> Result<String, String> {
+    if exceeds_card_limit(bytes.len() as u64) {
+        return Err("Die Karte ist größer als 64 MB.".into());
     }
+    let dir = require_linked_directory(&app, Path::new(&folder))?;
     let safe: String = file_name
         .chars()
         .map(|character| {
@@ -846,7 +1021,13 @@ fn add_character_file(folder: String, file_name: String, bytes: Vec<u8>) -> Resu
             }
         })
         .collect();
-    if safe.is_empty() || Path::new(&safe).components().count() != 1 {
+    if safe.is_empty()
+        || safe == "."
+        || safe == ".."
+        || Path::new(&safe)
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
         return Err("Ungültiger Dateiname.".into());
     }
     let target = dir.join(if safe.to_ascii_lowercase().ends_with(".png") {
@@ -854,6 +1035,7 @@ fn add_character_file(folder: String, file_name: String, bytes: Vec<u8>) -> Resu
     } else {
         format!("{safe}.png")
     });
+    card_destination_inside_root(&linked_root(&app)?, &target)?;
     if target.exists() {
         return Err("Eine Karte mit diesem Dateinamen existiert bereits.".into());
     }
@@ -862,17 +1044,15 @@ fn add_character_file(folder: String, file_name: String, bytes: Vec<u8>) -> Resu
 }
 
 #[tauri::command]
-fn duplicate_character_file(path: String) -> Result<String, String> {
-    let source = PathBuf::from(path);
-    if !allowed_card_path(&source) {
-        return Err("Nur vorhandene PNG- und JSON-Karten können dupliziert werden.".into());
-    }
+fn duplicate_character_file(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let source = require_linked_card(&app, Path::new(&path))?;
     let parent = source
         .parent()
         .ok_or_else(|| "Ungültiger Kartenpfad.".to_string())?;
     let stem = source.file_stem().unwrap_or_default().to_string_lossy();
     let extension = source.extension().unwrap_or_default().to_string_lossy();
     let target = unique_target(parent.join(format!("{stem} - Experiment.{extension}")));
+    card_destination_inside_root(&linked_root(&app)?, &target)?;
     fs::copy(&source, &target)
         .map_err(|error| format!("Experimentkopie konnte nicht erstellt werden: {error}"))?;
     Ok(target.to_string_lossy().into_owned())
@@ -884,10 +1064,7 @@ fn create_card_backup(
     path: String,
     label: String,
 ) -> Result<String, String> {
-    let file = PathBuf::from(&path);
-    if !allowed_card_path(&file) {
-        return Err("Nur vorhandene PNG- und JSON-Karten können gesichert werden.".into());
-    }
+    let file = require_linked_card(&app, Path::new(&path))?;
     let id = copy_card_version(&app, &file, true, 10)?;
     let dir = version_dir(&app, &file)?;
     set_version_label(&dir, &id, &label)?;
@@ -896,7 +1073,7 @@ fn create_card_backup(
 
 #[tauri::command]
 fn remove_character_file(app: tauri::AppHandle, path: String) -> Result<String, String> {
-    let file = PathBuf::from(path);
+    let file = require_linked_card(&app, Path::new(&path))?;
     archive_card(&file, &recovery_dir(&app)?).map(|target| target.to_string_lossy().into_owned())
 }
 
@@ -983,16 +1160,24 @@ fn restore_removed_card(
     let manifest: Option<RecoveryManifest> = fs::read(&manifest_path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-    let destination = if let Some(value) = manifest.as_ref() {
-        PathBuf::from(&value.original_path)
-    } else {
-        let folder = fallback_folder.ok_or_else(|| {
-            "Für diese ältere Sicherung muss zuerst ein SillyTavern-Ordner gekoppelt werden."
-                .to_string()
-        })?;
-        PathBuf::from(folder).join(id.split_once('-').map(|(_, name)| name).unwrap_or(&id))
-    };
+    let root = linked_root(&app)?;
+    let stored = stored_linked_folder(&app)?;
+    if let Some(folder) = fallback_folder.as_deref() {
+        if !folder.is_empty() {
+            require_linked_directory(&app, Path::new(folder))?;
+        }
+    }
+    let destination = recovery_destination(
+        &root,
+        &stored,
+        manifest
+            .as_ref()
+            .map(|value| PathBuf::from(&value.original_path))
+            .as_deref(),
+        recovery_file_name(&id)?,
+    )?;
     let target = unique_target(destination);
+    card_destination_inside_root(&root, &target)?;
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
@@ -1024,7 +1209,8 @@ fn delete_removed_card(app: tauri::AppHandle, id: String) -> Result<(), String> 
 
 #[tauri::command]
 fn list_card_versions(app: tauri::AppHandle, path: String) -> Result<Vec<VersionInfo>, String> {
-    let dir = version_dir(&app, Path::new(&path))?;
+    let file = require_linked_card(&app, Path::new(&path))?;
+    let dir = version_dir(&app, &file)?;
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -1052,11 +1238,11 @@ fn list_card_versions(app: tauri::AppHandle, path: String) -> Result<Vec<Version
 
 #[tauri::command]
 fn read_card_version(app: tauri::AppHandle, path: String, id: String) -> Result<Vec<u8>, String> {
-    if Path::new(&id).components().count() != 1 || parse_version_filename(&id).is_none() {
+    if !valid_version_id(&id) {
         return Err("Ungültige Versions-ID.".into());
     }
-    fs::read(version_dir(&app, Path::new(&path))?.join(id))
-        .map_err(|_| "Version nicht gefunden.".to_string())
+    let file = require_linked_card(&app, Path::new(&path))?;
+    fs::read(version_dir(&app, &file)?.join(id)).map_err(|_| "Version nicht gefunden.".to_string())
 }
 
 #[tauri::command]
@@ -1066,19 +1252,17 @@ fn rename_card_version(
     id: String,
     label: String,
 ) -> Result<(), String> {
-    let dir = version_dir(&app, Path::new(&path))?;
+    let file = require_linked_card(&app, Path::new(&path))?;
+    let dir = version_dir(&app, &file)?;
     set_version_label(&dir, &id, &label)
 }
 
 #[tauri::command]
 fn restore_card_version(app: tauri::AppHandle, path: String, id: String) -> Result<(), String> {
-    if Path::new(&id).components().count() != 1 {
+    if !valid_version_id(&id) {
         return Err("Ungültige Versions-ID.".into());
     }
-    let target = PathBuf::from(&path);
-    if !allowed_card_path(&target) {
-        return Err("Zielkarte nicht gefunden.".into());
-    }
+    let target = require_linked_card(&app, Path::new(&path))?;
     let source = version_dir(&app, &target)?.join(id);
     let bytes = fs::read(&source).map_err(|_| "Version nicht gefunden.".to_string())?;
     make_backup(&app, &target, 10)?;
@@ -1088,6 +1272,7 @@ fn restore_card_version(app: tauri::AppHandle, path: String, id: String) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
 
     #[test]
     fn extracts_character_name_from_png_text_chunk() {
@@ -1110,6 +1295,63 @@ mod tests {
         assert!(safe_base_url("http://localhost:11434/").is_ok());
         assert!(safe_base_url("https://example.com").is_err());
         assert!(safe_base_url("http://192.168.1.5:11434").is_err());
+    }
+
+    fn serve_once(response: &'static [u8]) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0u8; 2048];
+            let _ = stream.read(&mut buffer);
+            let _ = stream.write_all(response);
+        });
+        port
+    }
+
+    #[test]
+    fn ollama_client_rejects_local_redirects() {
+        let port = serve_once(b"HTTP/1.1 307 Temporary Redirect\r\nLocation: http://example.com/steal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        let client = ollama_client(Duration::from_secs(2)).unwrap();
+        let result = tauri::async_runtime::block_on(async move {
+            client
+                .get(format!("http://127.0.0.1:{port}/api/tags"))
+                .send()
+                .await
+        });
+        match result {
+            Ok(response) => {
+                assert!(response.status().is_redirection(), "{}", response.status());
+                assert_eq!(response.url().host_str(), Some("127.0.0.1"));
+            }
+            Err(error) => {
+                let message = error.to_string().to_lowercase();
+                assert!(
+                    error.is_redirect() || message.contains("redirect"),
+                    "{error}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ollama_client_times_out_when_the_local_server_never_answers() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_secs(3));
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        });
+        let client = ollama_client(Duration::from_millis(200)).unwrap();
+        let error = tauri::async_runtime::block_on(async move {
+            client
+                .get(format!("http://127.0.0.1:{port}/api/tags"))
+                .send()
+                .await
+        })
+        .expect_err("hung local request must time out");
+        assert!(error.is_timeout(), "{error}");
     }
 
     #[test]
@@ -1283,10 +1525,96 @@ mod tests {
             approved_error_kind("MODEL_JSON_INVALID"),
             "MODEL_JSON_INVALID"
         );
+        assert_eq!(approved_operation("ai_selection"), "ai_selection");
+        assert_eq!(
+            approved_operation("greeting_library_title"),
+            "greeting_library_title"
+        );
+        assert_eq!(
+            approved_operation("greeting_library_improve"),
+            "greeting_library_improve"
+        );
         assert_eq!(
             approved_operation("private notes: hello"),
             "UNKNOWN_OPERATION"
         );
         assert_eq!(approved_error_kind("private notes: hello"), "UNKNOWN_ERROR");
+    }
+
+    #[test]
+    fn version_ids_reject_label_files_and_path_segments() {
+        assert!(valid_version_id("100.png"));
+        assert!(valid_version_id("manual-50.json"));
+        assert!(!valid_version_id("labels.json"));
+        assert!(!valid_version_id("../100.png"));
+        assert!(!exceeds_card_limit(MAX_CARD_BYTES));
+        assert!(exceeds_card_limit(MAX_CARD_BYTES + 1));
+    }
+
+    #[test]
+    fn recovery_destination_stays_inside_the_coupled_folder() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("silly-easychar-root-{unique}"));
+        let outside = std::env::temp_dir().join(format!("silly-easychar-outside-{unique}"));
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let canonical = fs::canonicalize(&root).unwrap();
+        let inside = recovery_destination(
+            &canonical,
+            &root,
+            Some(&root.join("card.json")),
+            "card.json",
+        )
+        .unwrap();
+        assert_eq!(inside, root.join("card.json"));
+        let relocated = recovery_destination(
+            &canonical,
+            &root,
+            Some(&outside.join("card.json")),
+            "moved.json",
+        )
+        .unwrap();
+        assert_eq!(relocated, root.join("moved.json"));
+        assert!(card_destination_inside_root(&canonical, &outside.join("card.json")).is_err());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn character_scan_skips_symlinks_that_leave_the_folder() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("silly-easychar-link-test-{unique}"));
+        let outside = std::env::temp_dir().join(format!("silly-easychar-link-outside-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(
+            dir.join("visible.json"),
+            r#"{"spec":"chara_card_v2","data":{"name":"Visible"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            outside.join("secret.json"),
+            r#"{"spec":"chara_card_v2","data":{"name":"Secret"}}"#,
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.join("secret.json"), dir.join("escape.json")).unwrap();
+        let mut cards = Vec::new();
+        collect_cards(&dir, &mut cards);
+        assert_eq!(
+            cards
+                .iter()
+                .map(|card| card.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Visible"]
+        );
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(outside).unwrap();
     }
 }

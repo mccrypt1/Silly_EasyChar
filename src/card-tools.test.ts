@@ -25,6 +25,17 @@ describe("card safety tools", () => {
     expect(restored.data.alternate_greetings[0]).toBe("New greeting");
   });
 
+  it("diffs modification dates as their own field", () => {
+    const snapshot = emptyCard();
+    snapshot.data.modification_date = 10;
+    const current = structuredClone(snapshot);
+    current.data.modification_date = 20;
+    const diff = diffCards(current, snapshot).find(value => value.path === "/data/modification_date");
+    expect(diff?.label).toBe("Änderungsdatum");
+    const restored = restoreCardParts(current, snapshot, ["/data/modification_date"]);
+    expect(restored.data.modification_date).toBe(10);
+  });
+
   it("keeps a bounded undo and redo history", () => {
     const history = new UndoHistory(2);
     const first = { card: emptyCard(), image: null, label: "first" };

@@ -11,7 +11,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [{ "title": "Silly EasyChar", "width": 1520, "height": 940, "minWidth": 1160, "minHeight": 720, "resizable": true }],
+    "windows": [{ "label": "main", "title": "Silly EasyChar", "width": 1520, "height": 940, "minWidth": 1160, "minHeight": 720, "resizable": true }],
     "security": { "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost blob: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost" }
   },
   "bundle": {
